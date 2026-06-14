@@ -67,7 +67,7 @@ def _render_folium_map() -> Optional[str]:
                 "fillOpacity": 0.7,
             },
             tooltip=folium.GeoJsonTooltip(
-                fields=["SIG_KOR_NM"],
+                fields=["name"],
                 aliases=["구 이름:"],
                 localize=True,
             ),
@@ -129,7 +129,7 @@ def _find_district_by_coords(
 
         for feature in geojson_data.get("features", []):
             props = feature.get("properties", {})
-            name = props.get("SIG_KOR_NM", "")
+            name = props.get("name", "")
             if not name:
                 continue
 
