@@ -5,7 +5,6 @@
 #   bash run.sh           # Streamlit UI 실행 (기본)
 #   bash run.sh --cli     # CLI 모드로 코스 생성
 #   bash run.sh --test    # 전체 테스트 실행
-#   bash run.sh --seed    # 시드 데이터 재삽입 후 CLI 실행
 #   bash run.sh --help    # 도움말 출력
 
 set -e
@@ -38,7 +37,6 @@ _print_help() {
     echo "  bash run.sh           Streamlit UI 실행 (기본, 브라우저 자동 열림)"
     echo "  bash run.sh --cli     CLI 모드 (콘솔에서 코스 확인)"
     echo "  bash run.sh --test    전체 pytest 실행"
-    echo "  bash run.sh --seed    시드 데이터 재삽입 후 CLI 실행"
     echo "  bash run.sh --help    이 도움말 출력"
     echo ""
     echo "API 키: .env 파일에 키 입력 후 실행"
@@ -65,22 +63,11 @@ _run_tests() {
     "$PYTEST" date_planner/tests/ -v
 }
 
-_run_seed() {
-    echo "=== 시드 데이터 재삽입 ==="
-    "$PYTHON" -c "
-from date_planner.data.seed_data import insert_seed_data
-insert_seed_data()
-print('완료')
-"
-    _run_cli
-}
-
 # 인수 처리 (기본: UI)
 case "${1:-}" in
     ""|--ui)  _run_ui ;;
     --cli)    _run_cli ;;
     --test)   _run_tests ;;
-    --seed)   _run_seed ;;
     --help)   _print_help ;;
     *)
         echo "알 수 없는 옵션: $1"

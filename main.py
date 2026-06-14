@@ -2,10 +2,8 @@
 
 사용법:
     python main.py              # 샘플 입력으로 코스 생성
-    python main.py --seed       # 시드 데이터 삽입 후 코스 생성
 """
 
-import argparse
 import os
 import sys
 from datetime import date, timedelta
@@ -149,29 +147,13 @@ def _print_course(course, replan_count: int) -> None:
     print(f"{'=' * 50}")
 
 
-def _parse_args() -> argparse.Namespace:
-    """CLI 인수를 파싱한다."""
-    parser = argparse.ArgumentParser(description="데이트 코스 플래너")
-    parser.add_argument("--seed", action="store_true", help="시드 데이터 삽입 후 실행")
-    return parser.parse_args()
-
-
 def main() -> None:
     """메인 진입점."""
-    args = _parse_args()
-
     try:
         init_db()
     except Exception as e:
         logger.error("DB 초기화 실패: %s", e)
         sys.exit(1)
-
-    if args.seed:
-        try:
-            from date_planner.data.seed_data import insert_seed_data
-            insert_seed_data()
-        except Exception as e:
-            logger.error("시드 데이터 삽입 실패: %s", e)
 
     run(_SAMPLE_INPUT)
 

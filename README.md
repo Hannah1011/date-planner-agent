@@ -41,7 +41,6 @@
 
 본 시스템은 Course Narrator Agent를 중심으로, Search Agent, Route Planner Agent, Memory Agent, Feedback Agent가 각각 검색, 동선 설계, 기억 관리, 피드백 처리를 담당하는 멀티 에이전트 구조로 설계되었습니다. OpenAI 모델은 **Course Narrator Agent**의 설명 생성과 **Feedback & Replan Agent**의 거절 이유 분석에 사용됩니다. Feedback 분석 호출이 실패하면 자주 쓰는 대체 표현을 처리하는 규칙 기반 분석으로 폴백합니다.
 
-`Input Parser`는 핵심 에이전트가 아니라 Streamlit 입력을 검증하고 `UserRequest` 구조체로 변환하는 전처리 컴포넌트입니다. Search, Route Planner, Memory는 LLM을 직접 호출하지 않고 외부 도구와 규칙 기반 로직으로 동작합니다.
 
 ## 아키텍처 및 실행 흐름
 
