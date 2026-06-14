@@ -39,7 +39,19 @@
 | **Course Narrator Agent** | 이번 요청과 DB 저장 취향을 구분해 코스 구성 이유를 생성하고, 리플랜 시 피드백 반영 내용을 설명 |
 | **Feedback & Replan Agent** | 승인·거절을 처리하고 LLM으로 제외 대상과 새 검색어를 분석해 다른 장소를 다시 검색 |
 
-본 시스템은 Course Narrator Agent를 중심으로, Search Agent, Route Planner Agent, Memory Agent, Feedback Agent가 각각 검색, 동선 설계, 기억 관리, 피드백 처리를 담당하는 멀티 에이전트 구조로 설계되었습니다. OpenAI 모델은 **Course Narrator Agent**의 설명 생성과 **Feedback & Replan Agent**의 거절 이유 분석에 사용됩니다. Feedback 분석 호출이 실패하면 자주 쓰는 대체 표현을 처리하는 규칙 기반 분석으로 폴백합니다.
+본 시스템은 Course Narrator Agent를 중심으로, Search Agent, Route Planner Agent, Memory Agent, Feedback Agent가 각각 검색, 동선 설계, 기억 관리, 피드백 처리를 담당하는 멀티 에이전트 구조로 설계되었습니다. OpenAI 모델은 **Course Narrator Agent**의 설명 생성과 **Feedback & Replan Agent**의 거절 이유 분석에만 사용합니다. Narrator 호출이 실패하면 템플릿 설명으로, Feedback 분석 호출이 실패하면 자주 쓰는 대체 표현을 처리하는 규칙 기반 분석으로 폴백합니다.
+
+### LLM 선정 기준과 비용 최적화
+
+LLM은 규칙이나 외부 API만으로 처리하기 어려운 자연어 작업에만 제한적으로 사용합니다. 모델은 작업 복잡도, 출력 형식 안정성, 오류가 후속 단계에 미치는 영향, 호출 비용, 폴백 가능성을 기준으로 선택했습니다.
+
+| 대상 | 모델 / 처리 방식 | 선정 이유 |
+|---|---|---|
+| **Course Narrator** | `gpt-4o-mini` | 정해진 코스와 취향 정보를 짧고 자연스럽게 설명하는 작업으로, 고성능 추론보다 응답 속도와 낮은 호출 비용을 우선합니다. 실패해도 템플릿으로 동일한 핵심 정보를 제공할 수 있습니다. |
+| **Feedback & Replan** | `gpt-4o` | 자유 형식의 거절 이유에서 제외 대상과 새 검색어를 정확한 JSON으로 추출해야 하며, 분석 오류가 다음 장소 검색과 코스 전체를 바꿀 수 있어 정확도와 구조화 출력 안정성을 우선합니다. 실패 시 규칙 기반 분석으로 폴백합니다. |
+| **Search / Route Planner / Memory** | LLM 미사용 | 장소 검색은 외부 API 병렬 호출, 동선 구성은 제약 기반 규칙, 취향 저장·조회는 SQLite로 처리해 결과 재현성을 높이고 불필요한 토큰 비용을 제거합니다. |
+
+즉, 자주 실행되는 설명 생성에는 경량 모델을 사용하고, 리플랜 때만 조건부로 실행되는 고영향 분석에는 더 높은 성능의 모델을 사용합니다. 두 LLM 작업 모두 폴백 경로를 두어 API 장애나 키 미설정 상황에서도 핵심 추천 흐름이 유지됩니다.
 
 
 ## 아키텍처 및 실행 흐름
@@ -315,7 +327,7 @@ bash run.sh --ui
 | **Goal Setting & Monitoring** | 선택한 무드별 장소 최소 한 곳 포함 여부와 리플랜 횟수를 추적하고, 리플랜 상한을 넘으면 조건 변경을 안내합니다. |
 | **Guardrails** | 지역·날짜 입력 검증, 최대 코스 장소 수, 장소 간 이동 시간 기준, 음식점·카페 최대 개수, 최대 리플랜 횟수를 제한합니다. |
 | **Exception Handling** | 외부 API와 DB 작업 실패를 `try-except`로 처리하고 빈 결과나 기본값으로 폴백하여 앱 전체가 중단되지 않도록 합니다. |
-| **Resource-Aware Optimization** | 장소 검색은 병렬 처리하고, LLM은 Course Narrator 설명과 Feedback 분석에만 사용합니다. Narrator는 템플릿으로, Feedback 분석은 규칙 기반 분석으로 폴백합니다. |
+| **Resource-Aware Optimization** | 장소 검색은 병렬 처리하고, LLM은 Course Narrator 설명과 Feedback 분석에만 사용합니다. 호출 빈도가 높은 Narrator에는 `gpt-4o-mini`, 리플랜 결과에 직접 영향을 주는 Feedback 분석에는 `gpt-4o`를 사용하며, 각각 템플릿과 규칙 기반 분석으로 폴백합니다. |
 
 ## 동작 확인 체크리스트
 
