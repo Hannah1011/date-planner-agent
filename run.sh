@@ -2,8 +2,8 @@
 # 프로젝트 실행 스크립트
 #
 # 사용법:
-#   bash run.sh           # CLI 모드로 코스 생성 (Mock)
-#   bash run.sh --ui      # Streamlit UI 실행
+#   bash run.sh           # Streamlit UI 실행 (기본)
+#   bash run.sh --cli     # CLI 모드로 코스 생성
 #   bash run.sh --test    # 전체 테스트 실행
 #   bash run.sh --seed    # 시드 데이터 재삽입 후 CLI 실행
 #   bash run.sh --help    # 도움말 출력
@@ -35,8 +35,8 @@ _print_help() {
     echo "Date Planner Agent 실행 스크립트"
     echo ""
     echo "사용법:"
-    echo "  bash run.sh           CLI 모드 (Mock API로 코스 생성)"
-    echo "  bash run.sh --ui      Streamlit UI 실행 (브라우저 자동 열림)"
+    echo "  bash run.sh           Streamlit UI 실행 (기본, 브라우저 자동 열림)"
+    echo "  bash run.sh --cli     CLI 모드 (콘솔에서 코스 확인)"
     echo "  bash run.sh --test    전체 pytest 실행"
     echo "  bash run.sh --seed    시드 데이터 재삽입 후 CLI 실행"
     echo "  bash run.sh --help    이 도움말 출력"
@@ -75,13 +75,13 @@ print('완료')
     _run_cli
 }
 
-# 인수 처리
+# 인수 처리 (기본: UI)
 case "${1:-}" in
-    --ui)     _run_ui ;;
+    ""|--ui)  _run_ui ;;
+    --cli)    _run_cli ;;
     --test)   _run_tests ;;
     --seed)   _run_seed ;;
     --help)   _print_help ;;
-    "")       _run_cli ;;
     *)
         echo "알 수 없는 옵션: $1"
         _print_help

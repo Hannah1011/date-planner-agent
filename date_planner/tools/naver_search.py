@@ -38,15 +38,23 @@ def search_places(query: str, display: int = 5) -> list[dict]:
         )
         response.raise_for_status()
         items = response.json().get("items", [])
-        return [
-            {
+        results = []
+        for item in items:
+            # mapx/mapy는 WGS84 좌표를 1e7 배 한 정수값
+            try:
+                lat = int(item.get("mapy", 0)) / 1e7
+                lon = int(item.get("mapx", 0)) / 1e7
+            except (ValueError, TypeError):
+                lat, lon = 0.0, 0.0
+            results.append({
                 "name": item.get("title", "").replace("<b>", "").replace("</b>", ""),
                 "address": item.get("roadAddress") or item.get("address", ""),
                 "category": item.get("category", ""),
                 "link": item.get("link", ""),
-            }
-            for item in items
-        ]
+                "lat": lat,
+                "lon": lon,
+            })
+        return results
     except requests.RequestException as e:
         logger.error("네이버 검색 API 호출 실패: %s", e)
         return []

@@ -4,10 +4,18 @@
   1. 지도에서 구 선택
   2. 날짜/시간대/무드/음식취향/예산 입력
   3. 코스 생성 버튼 -> Agent 파이프라인 실행
-  4. 코스 출력 + 지도 마커 표시
+  4. 코스 출력 + 지도 마커 + 경로선 표시
   5. 승인/거절 HITL 체크포인트
   6. 거절 시 이유 입력 -> 리플랜
 """
+
+import sys
+from pathlib import Path
+
+# streamlit run 직접 실행 시 프로젝트 루트를 Python 경로에 추가
+_project_root = str(Path(__file__).resolve().parents[2])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import os
 from datetime import date, timedelta
@@ -63,10 +71,8 @@ def main() -> None:
     st.title("데이트 코스 플래너")
     st.caption("날짜, 지역, 무드를 설정하면 맞춤 데이트 코스를 추천해 드립니다.")
 
-    # 취향 맥락 사이드바
     _render_preference_sidebar()
 
-    # 입력 폼
     with st.form("course_form"):
         col1, col2 = st.columns([1, 1])
 
@@ -95,7 +101,6 @@ def main() -> None:
             return
         _generate_course(district, selected_date, time_slot, mood, food_prefs, cafe_style, int(budget))
 
-    # 코스 출력 및 HITL
     if st.session_state.get("course"):
         _render_course()
         _render_hitl()
@@ -136,14 +141,14 @@ def _generate_course(
             if context:
                 st.caption(f"✓ 취향 맥락 {len(context)}자 로드 완료")
             else:
-                st.caption("✓ 저장된 취향 없음")
+                st.caption("✓ 저장된 취향 없음 (코스 승인 시 학습됩니다)")
 
             st.write("**[Step 2] Search Agent** — 네이버 검색 → Google Places 병렬 조회 중...")
             candidates = search_candidates(request)
             open_candidates = filter_open_places(candidates)
             st.caption(f"✓ 후보 {len(candidates)}개 수집, 영업 중 {len(open_candidates)}개")
 
-            st.write("**[Step 3] Route Planner Agent** — 이동 시간 최적화 + 날씨 반영 중...")
+            st.write("**[Step 3] Route Planner Agent** — Google Directions 이동 시간 최적화 + 날씨 반영 중...")
             course = build_course(open_candidates, request)
 
             if course.stops:
@@ -170,7 +175,7 @@ def _generate_course(
 
 
 def _render_course() -> None:
-    """저장된 코스를 화면에 출력하고 Folium 지도에 마커를 표시한다."""
+    """저장된 코스를 화면에 출력하고 지도에 핀과 경로선을 표시한다."""
     course = st.session_state["course"]
 
     st.divider()
@@ -179,6 +184,10 @@ def _render_course() -> None:
     if course.weather_note:
         st.info(f"날씨: {course.weather_note}")
 
+    # 지도를 코스 카드 위에 표시
+    _render_course_map(course)
+
+    st.markdown("---")
     for stop in course.stops:
         with st.container(border=True):
             col_num, col_info = st.columns([1, 8])
@@ -190,31 +199,93 @@ def _render_course() -> None:
                 if stop.transit_minutes_from_prev:
                     st.caption(f"이전 장소에서 {stop.transit_minutes_from_prev}분")
                 cols = st.columns(3)
-                cols[0].metric("별점", f"{stop.place.rating}")
+                cols[0].metric("별점", f"⭐ {stop.place.rating}" if stop.place.rating else "정보 없음")
                 cols[1].metric("예상 비용", f"{stop.estimated_cost:,}원")
                 cols[2].metric("가격대", "₩" * max(1, stop.place.price_level))
 
-    st.metric("총 이동 시간", f"{course.total_transit_minutes}분")
-    st.metric("총 예상 비용", f"{course.total_estimated_cost:,}원")
+                # 리뷰 표시
+                if stop.place.reviews:
+                    with st.expander(f"리뷰 {len(stop.place.reviews)}개 보기"):
+                        for review in stop.place.reviews[:3]:
+                            stars = int(review.get("rating", 0))
+                            author = review.get("author_name", "익명")
+                            text = review.get("text", "")[:200]
+                            relative_time = review.get("relative_time_description", "")
+                            st.markdown(f"{'⭐' * stars} **{author}** {relative_time}")
+                            if text:
+                                st.caption(text)
+                            st.divider()
 
-    _render_course_map(course)
+    col1, col2 = st.columns(2)
+    col1.metric("총 이동 시간", f"{course.total_transit_minutes}분")
+    col2.metric("총 예상 비용", f"{course.total_estimated_cost:,}원")
 
 
 def _render_course_map(course) -> None:
-    """코스 장소를 Folium 지도에 마커로 표시한다."""
+    """코스 장소를 Folium 지도에 번호 핀과 경로선으로 표시한다."""
     try:
         import folium
         from streamlit_folium import st_folium
 
-        m = folium.Map(location=[37.5665, 126.9780], zoom_start=13, tiles="CartoDB positron")
-        for stop in course.stops:
+        # 좌표가 있는 장소만 필터
+        stops_with_coords = [
+            s for s in course.stops
+            if s.place.lat != 0.0 and s.place.lon != 0.0
+        ]
+
+        if stops_with_coords:
+            center_lat = sum(s.place.lat for s in stops_with_coords) / len(stops_with_coords)
+            center_lon = sum(s.place.lon for s in stops_with_coords) / len(stops_with_coords)
+            zoom = 14
+        else:
+            center_lat, center_lon = 37.5665, 126.9780
+            zoom = 13
+
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles="CartoDB positron")
+
+        line_coords = []
+        for stop in stops_with_coords:
+            lat, lon = stop.place.lat, stop.place.lon
+            bg_color = "#e74c3c" if stop.visit_order == 1 else "#3498db"
+
             folium.Marker(
-                location=[37.5665, 126.9780],
-                popup=f"{stop.visit_order}. {stop.place.name}",
-                tooltip=stop.place.name,
-                icon=folium.Icon(color="red" if stop.visit_order == 1 else "blue", icon="info-sign"),
+                location=[lat, lon],
+                icon=folium.DivIcon(
+                    html=(
+                        f'<div style="font-size:13px;color:white;background:{bg_color};'
+                        f'border-radius:50%;width:28px;height:28px;line-height:28px;'
+                        f'text-align:center;font-weight:bold;box-shadow:0 2px 4px rgba(0,0,0,0.3)">'
+                        f'{stop.visit_order}</div>'
+                    ),
+                    icon_size=(28, 28),
+                    icon_anchor=(14, 14),
+                ),
+                popup=folium.Popup(
+                    f"<b>{stop.visit_order}. {stop.place.name}</b>"
+                    f"<br><small>{stop.place.address}</small>"
+                    f"<br>카테고리: {stop.place.category}"
+                    + (f"<br>⭐ {stop.place.rating}" if stop.place.rating else ""),
+                    max_width=220,
+                ),
+                tooltip=f"{stop.visit_order}. {stop.place.name}",
             ).add_to(m)
-        st_folium(m, width=700, height=350, returned_objects=[])
+            line_coords.append([lat, lon])
+
+        # 장소 간 경로선
+        if len(line_coords) > 1:
+            folium.PolyLine(
+                line_coords,
+                color="#3498db",
+                weight=3,
+                opacity=0.7,
+                dash_array="8",
+            ).add_to(m)
+
+        if not stops_with_coords:
+            st.caption("지도 좌표를 가져오지 못한 장소는 핀 표시가 생략됩니다.")
+
+        st_folium(m, width="100%", height=420, returned_objects=[])
+
     except Exception as e:
         logger.warning("코스 지도 렌더링 생략: %s", e)
 
@@ -263,9 +334,11 @@ def _render_hitl() -> None:
             candidates = st.session_state.get("candidates", [])
             filtered = apply_feedback_to_candidates(candidates, reason)
 
-            with st.spinner("리플랜 중..."):
+            with st.status("리플랜 중...", expanded=True) as status:
+                st.write("**[Replan] Route Planner Agent** — 조건 반영 후 코스 재구성 중...")
                 try:
                     new_course = build_course(filtered, request)
+                    status.update(label="리플랜 완료!", state="complete")
                 except Exception as e:
                     logger.error("리플랜 실패: %s", e)
                     st.error("리플랜 중 오류가 발생했습니다.")
@@ -287,19 +360,12 @@ def _render_preference_sidebar() -> None:
             st.text(context)
         else:
             st.caption("저장된 취향이 없습니다. 코스를 승인하면 취향이 학습됩니다.")
+        st.divider()
+        st.caption("취향 데이터는 이 기기의 로컬 DB(preferences.db)에 저장됩니다.")
 
 
 def _select_enum(label: str, label_map: dict, default) -> object:
-    """Enum 값을 selectbox로 선택한다.
-
-    Args:
-        label: selectbox 레이블.
-        label_map: Enum -> 표시 레이블 dict.
-        default: 기본 선택값.
-
-    Returns:
-        선택된 Enum 인스턴스.
-    """
+    """Enum 값을 selectbox로 선택한다."""
     options = list(label_map.keys())
     labels = [label_map[o] for o in options]
     default_idx = options.index(default) if default in options else 0

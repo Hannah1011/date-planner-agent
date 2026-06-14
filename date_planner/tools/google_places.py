@@ -39,7 +39,7 @@ def get_place_details(place_name: str, address: str) -> dict:
             _DETAILS_URL,
             params={
                 "place_id": place_id,
-                "fields": "place_id,rating,price_level,opening_hours,reviews",
+                "fields": "place_id,rating,price_level,opening_hours,reviews,geometry",
                 "key": api_key,
                 "language": "ko",
             },
@@ -47,12 +47,15 @@ def get_place_details(place_name: str, address: str) -> dict:
         )
         response.raise_for_status()
         result = response.json().get("result", {})
+        location = result.get("geometry", {}).get("location", {})
         return {
             "place_id": result.get("place_id", ""),
             "rating": result.get("rating", 0.0),
             "price_level": result.get("price_level", 0),
             "opening_hours": result.get("opening_hours", {}),
             "reviews": result.get("reviews", []),
+            "lat": location.get("lat", 0.0),
+            "lon": location.get("lng", 0.0),
         }
     except requests.RequestException as e:
         logger.error("Google Places 상세 조회 실패: %s", e)

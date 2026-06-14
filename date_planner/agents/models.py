@@ -33,6 +33,8 @@ class PlaceCandidate:
     district: str = ""
     place_id: str = ""
     reviews: list[dict] = field(default_factory=list)
+    lat: float = 0.0
+    lon: float = 0.0
 
 
 @dataclass

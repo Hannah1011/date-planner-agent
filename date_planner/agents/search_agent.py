@@ -83,6 +83,14 @@ def _enrich_candidates(raw_places: list[dict], date: str) -> list[PlaceCandidate
             place_id = details.get("place_id", "")
             is_open = is_place_open_now(place_id) if place_id else True
 
+            # 좌표: Google Places 우선, 없으면 Naver mapx/mapy 폴백
+            google_lat = details.get("lat", 0.0)
+            google_lon = details.get("lon", 0.0)
+            naver_lat = place.get("lat", 0.0)
+            naver_lon = place.get("lon", 0.0)
+            lat = google_lat if google_lat != 0.0 else naver_lat
+            lon = google_lon if google_lon != 0.0 else naver_lon
+
             candidates.append(
                 PlaceCandidate(
                     name=name,
@@ -93,6 +101,8 @@ def _enrich_candidates(raw_places: list[dict], date: str) -> list[PlaceCandidate
                     price_level=int(details.get("price_level", 0)),
                     place_id=place_id,
                     reviews=details.get("reviews", []),
+                    lat=lat,
+                    lon=lon,
                 )
             )
         except Exception as e:
