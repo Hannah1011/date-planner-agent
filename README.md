@@ -316,7 +316,6 @@ bash run.sh --ui
 | **Guardrails** | 지역·날짜 입력 검증, 최대 코스 장소 수, 장소 간 이동 시간 기준, 음식점·카페 최대 개수, 최대 리플랜 횟수를 제한합니다. |
 | **Exception Handling** | 외부 API와 DB 작업 실패를 `try-except`로 처리하고 빈 결과나 기본값으로 폴백하여 앱 전체가 중단되지 않도록 합니다. |
 | **Resource-Aware Optimization** | 장소 검색은 병렬 처리하고, LLM은 Course Narrator 설명과 Feedback 분석에만 사용합니다. Narrator는 템플릿으로, Feedback 분석은 규칙 기반 분석으로 폴백합니다. |
-| **Testing** | pytest와 pytest-mock으로 에이전트, 도구, DB, Guardrail, UI 날짜·시간대 입력 규칙을 자동 검증합니다. |
 
 ## 동작 확인 체크리스트
 
