@@ -1,17 +1,14 @@
-"""Phase 5: Agent 입출력 타입 및 예외처리 테스트 (LLM 호출 없음)."""
+"""Phase 5: Agent 입출력 타입 및 예외처리 테스트.
 
-import os
+tool 함수를 monkeypatch로 대체해 LLM·HTTP 호출 없이 검증한다.
+"""
+
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
-from date_planner.agents.models import (
-    CourseStop,
-    DateCourse,
-    PlaceCandidate,
-    UserRequest,
-)
+from date_planner.agents.models import CourseStop, DateCourse, PlaceCandidate, UserRequest
 from date_planner.agents.input_collector import parse_user_request, build_search_query
 from date_planner.agents.search_agent import search_candidates, filter_open_places
 from date_planner.agents.route_planner import build_course, is_within_budget
@@ -20,9 +17,39 @@ from date_planner.agents.feedback_replan import process_feedback, apply_feedback
 from date_planner.config.constants import CafeStyle, Mood, TimeSlot
 
 
+# --- Mock 반환 데이터 ---
+
+_MOCK_NAVER_RESULTS = [
+    {"name": "연남동 파스타집", "address": "서울 마포구 연남동 123-4",
+     "category": "음식점>이탈리안", "link": "https://example.com/a"},
+    {"name": "상수 감성 카페", "address": "서울 마포구 상수동 56-7",
+     "category": "카페>커피전문점", "link": "https://example.com/b"},
+]
+
+_MOCK_PLACE_DETAILS = {
+    "place_id": "ChIJmock001",
+    "rating": 4.2,
+    "price_level": 2,
+    "opening_hours": {"open_now": True, "periods": [], "weekday_text": []},
+    "reviews": [{"rating": 5, "text": "좋아요"}],
+}
+
+_MOCK_WEATHER = {"condition": "맑음", "temperature": 22.0, "precipitation_probability": 10}
+
+
 @pytest.fixture(autouse=True)
-def force_mock_mode(monkeypatch):
-    monkeypatch.setenv("USE_MOCK", "true")
+def mock_tools(monkeypatch):
+    """모든 외부 API 호출을 monkeypatch로 대체한다."""
+    monkeypatch.setattr("date_planner.agents.search_agent.search_places",
+                        lambda q, display=5: _MOCK_NAVER_RESULTS)
+    monkeypatch.setattr("date_planner.agents.search_agent.get_place_details",
+                        lambda name, addr: _MOCK_PLACE_DETAILS)
+    monkeypatch.setattr("date_planner.agents.search_agent.is_place_open_now",
+                        lambda pid: True)
+    monkeypatch.setattr("date_planner.agents.route_planner.get_transit_duration",
+                        lambda o, d: 20)
+    monkeypatch.setattr("date_planner.agents.route_planner.get_weather",
+                        lambda dist, dt: _MOCK_WEATHER)
 
 
 @pytest.fixture
@@ -42,60 +69,33 @@ def sample_request() -> UserRequest:
 @pytest.fixture
 def sample_candidates() -> list[PlaceCandidate]:
     return [
-        PlaceCandidate(
-            name="연남동 파스타집",
-            address="서울 마포구 연남동 123",
-            category="음식점>이탈리안",
-            rating=4.5,
-            is_open=True,
-            price_level=2,
-        ),
-        PlaceCandidate(
-            name="상수 감성 카페",
-            address="서울 마포구 상수동 56",
-            category="카페>커피전문점",
-            rating=4.2,
-            is_open=True,
-            price_level=1,
-        ),
-        PlaceCandidate(
-            name="폐점된 가게",
-            address="서울 마포구 연남동 99",
-            category="음식점",
-            rating=3.0,
-            is_open=False,
-            price_level=1,
-        ),
+        PlaceCandidate(name="연남동 파스타집", address="서울 마포구 연남동 123",
+                       category="음식점>이탈리안", rating=4.5, is_open=True, price_level=2),
+        PlaceCandidate(name="상수 감성 카페", address="서울 마포구 상수동 56",
+                       category="카페>커피전문점", rating=4.2, is_open=True, price_level=1),
+        PlaceCandidate(name="폐점된 가게", address="서울 마포구 연남동 99",
+                       category="음식점", rating=3.0, is_open=False, price_level=1),
     ]
 
 
 @pytest.fixture
 def sample_course(sample_candidates) -> DateCourse:
     stops = [
-        CourseStop(place=sample_candidates[0], transit_minutes_from_prev=0, estimated_cost=25000, visit_order=1),
-        CourseStop(place=sample_candidates[1], transit_minutes_from_prev=15, estimated_cost=15000, visit_order=2),
+        CourseStop(place=sample_candidates[0], transit_minutes_from_prev=0,
+                   estimated_cost=25000, visit_order=1),
+        CourseStop(place=sample_candidates[1], transit_minutes_from_prev=15,
+                   estimated_cost=15000, visit_order=2),
     ]
-    return DateCourse(
-        stops=stops,
-        total_transit_minutes=15,
-        total_estimated_cost=40000,
-        weather_note="맑음 22.0°C",
-        session_id="test-session-001",
-    )
+    return DateCourse(stops=stops, total_transit_minutes=15, total_estimated_cost=40000,
+                      weather_note="맑음 22.0°C", session_id="test-session-001")
 
 
 class TestInputCollector:
     def test_parse_valid_input(self, sample_request):
         future = sample_request.date
-        raw = {
-            "district": "마포구",
-            "date": future,
-            "time_slot": "AFTERNOON",
-            "mood": "FOOD_EXPLORATION",
-            "food_preferences": ["파스타"],
-            "cafe_style": "COZY",
-            "budget": 60000,
-        }
+        raw = {"district": "마포구", "date": future, "time_slot": "AFTERNOON",
+               "mood": "FOOD_EXPLORATION", "food_preferences": ["파스타"],
+               "cafe_style": "COZY", "budget": 60000}
         result = parse_user_request(raw)
         assert isinstance(result, UserRequest)
         assert result.district == "마포구"
@@ -112,12 +112,8 @@ class TestInputCollector:
 
     def test_unknown_time_slot_defaults_to_all_day(self):
         future = (date.today() + timedelta(days=1)).isoformat()
-        result = parse_user_request({
-            "district": "마포구",
-            "date": future,
-            "time_slot": "UNKNOWN_SLOT",
-            "budget": 50000,
-        })
+        result = parse_user_request({"district": "마포구", "date": future,
+                                     "time_slot": "UNKNOWN", "budget": 50000})
         assert result.time_slot == TimeSlot.ALL_DAY
 
     def test_build_search_query_with_preferences(self, sample_request):
@@ -138,13 +134,11 @@ class TestSearchAgent:
         assert isinstance(result, list)
 
     def test_each_candidate_is_place_candidate(self, sample_request):
-        results = search_candidates(sample_request)
-        for item in results:
+        for item in search_candidates(sample_request):
             assert isinstance(item, PlaceCandidate)
 
     def test_each_candidate_has_name(self, sample_request):
-        results = search_candidates(sample_request)
-        for item in results:
+        for item in search_candidates(sample_request):
             assert item.name
 
     def test_filter_open_places_excludes_closed(self, sample_candidates):
@@ -158,21 +152,17 @@ class TestSearchAgent:
 
 class TestRoutePlanner:
     def test_build_course_returns_date_course(self, sample_candidates, sample_request):
-        course = build_course(sample_candidates, sample_request)
-        assert isinstance(course, DateCourse)
+        assert isinstance(build_course(sample_candidates, sample_request), DateCourse)
 
     def test_build_course_has_stops(self, sample_candidates, sample_request):
-        course = build_course(sample_candidates, sample_request)
-        assert len(course.stops) >= 1
+        assert len(build_course(sample_candidates, sample_request).stops) >= 1
 
     def test_build_course_empty_candidates(self, sample_request):
         course = build_course([], sample_request)
-        assert isinstance(course, DateCourse)
         assert len(course.stops) == 0
 
-    def test_stops_have_order(self, sample_candidates, sample_request):
-        course = build_course(sample_candidates, sample_request)
-        for i, stop in enumerate(course.stops):
+    def test_stops_have_correct_order(self, sample_candidates, sample_request):
+        for i, stop in enumerate(build_course(sample_candidates, sample_request).stops):
             assert stop.visit_order == i + 1
 
     def test_is_within_budget_true(self, sample_course):
@@ -181,24 +171,19 @@ class TestRoutePlanner:
     def test_is_within_budget_false(self, sample_course):
         assert is_within_budget(sample_course, 10000) is False
 
-    def test_course_summary_returns_string(self, sample_course):
-        summary = sample_course.summary()
-        assert isinstance(summary, str)
-        assert "연남동 파스타집" in summary
+    def test_course_summary_contains_place_name(self, sample_course):
+        assert "연남동 파스타집" in sample_course.summary()
 
-    def test_weather_note_populated(self, sample_candidates, sample_request):
-        course = build_course(sample_candidates, sample_request)
-        assert isinstance(course.weather_note, str)
+    def test_weather_note_is_string(self, sample_candidates, sample_request):
+        assert isinstance(build_course(sample_candidates, sample_request).weather_note, str)
 
 
 class TestMemoryAgent:
     def test_load_context_returns_string(self, tmp_path):
-        result = load_context(db_path=tmp_path / "test.db")
-        assert isinstance(result, str)
+        assert isinstance(load_context(db_path=tmp_path / "test.db"), str)
 
     def test_load_context_empty_when_no_data(self, tmp_path):
-        result = load_context(db_path=tmp_path / "empty.db")
-        assert result == ""
+        assert load_context(db_path=tmp_path / "empty.db") == ""
 
     def test_save_accepted_course_does_not_raise(self, sample_course, tmp_path):
         db = tmp_path / "pref.db"
@@ -214,7 +199,7 @@ class TestFeedbackReplan:
         assert result.suggest_new_conditions is False
 
     def test_rejected_increments_count(self, sample_course, sample_request):
-        result = process_feedback(sample_course, False, "카페가 너무 시끄러웠어요", 0, sample_request)
+        result = process_feedback(sample_course, False, "카페가 시끄러웠어요", 0, sample_request)
         assert result.accepted is False
         assert result.replan_count == 1
 
@@ -222,17 +207,14 @@ class TestFeedbackReplan:
         result = process_feedback(sample_course, False, "", 0, sample_request)
         assert result.replan_count == 0
 
-    def test_exceeded_replan_limit_suggests_new_conditions(self, sample_course, sample_request):
+    def test_exceeded_limit_suggests_new_conditions(self, sample_course, sample_request):
         from date_planner.config.constants import MAX_REPLAN_ATTEMPTS
-        result = process_feedback(
-            sample_course, False, "전부 별로예요", MAX_REPLAN_ATTEMPTS, sample_request
-        )
+        result = process_feedback(sample_course, False, "전부 별로예요",
+                                  MAX_REPLAN_ATTEMPTS, sample_request)
         assert result.suggest_new_conditions is True
 
     def test_apply_feedback_returns_list(self, sample_candidates):
-        result = apply_feedback_to_candidates(sample_candidates, "파스타가 별로야")
-        assert isinstance(result, list)
+        assert isinstance(apply_feedback_to_candidates(sample_candidates, "파스타가 별로야"), list)
 
     def test_apply_feedback_empty_reason_unchanged(self, sample_candidates):
-        result = apply_feedback_to_candidates(sample_candidates, "")
-        assert result == sample_candidates
+        assert apply_feedback_to_candidates(sample_candidates, "") == sample_candidates

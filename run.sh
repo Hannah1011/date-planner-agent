@@ -29,9 +29,6 @@ if [ -f ".env" ]; then
     set +o allexport
 fi
 
-# USE_MOCK 기본값: .env에 없으면 true
-USE_MOCK="${USE_MOCK:-true}"
-export USE_MOCK
 
 _print_help() {
     echo ""
@@ -44,15 +41,12 @@ _print_help() {
     echo "  bash run.sh --seed    시드 데이터 재삽입 후 CLI 실행"
     echo "  bash run.sh --help    이 도움말 출력"
     echo ""
-    echo "API 키 설정:"
-    echo "  .env 파일에서 USE_MOCK=false 로 변경하고 각 키를 입력하면 실제 API 연동"
-    echo ""
-    echo "현재 모드: USE_MOCK=$USE_MOCK"
+    echo "API 키: .env 파일에 키 입력 후 실행"
     echo ""
 }
 
 _run_cli() {
-    echo "=== CLI 모드 실행 (USE_MOCK=$USE_MOCK) ==="
+    echo "=== CLI 모드 실행 ==="
     "$PYTHON" main.py "$@"
 }
 
@@ -67,8 +61,8 @@ _run_ui() {
 }
 
 _run_tests() {
-    echo "=== 전체 테스트 실행 (USE_MOCK=true 강제 적용) ==="
-    USE_MOCK=true "$PYTEST" date_planner/tests/ -v
+    echo "=== 전체 테스트 실행 ==="
+    "$PYTEST" date_planner/tests/ -v
 }
 
 _run_seed() {

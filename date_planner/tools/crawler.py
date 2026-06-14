@@ -1,10 +1,5 @@
-"""브레이크타임 정보 크롤러 (Google Places에서 불명확한 상위 5개 장소만 대상).
+"""브레이크타임 정보 크롤러 (Google Places에서 불명확한 상위 5개 장소만 대상)."""
 
-USE_MOCK=true 환경 변수가 설정된 경우 Mock 응답을 반환한다.
-실제 크롤링은 차단 최소화를 위해 requests + BeautifulSoup을 사용한다.
-"""
-
-import os
 import re
 
 import requests
@@ -21,7 +16,7 @@ _USER_AGENT = (
 )
 _NAVER_SEARCH_URL = "https://search.naver.com/search.naver"
 
-_MOCK_BREAK_TIME = {
+_NO_BREAK_TIME: dict = {
     "has_break_time": False,
     "break_start": None,
     "break_end": None,
@@ -42,19 +37,15 @@ def get_break_time_info(place_name: str, address: str) -> dict:
         has_break_time, break_start, break_end, last_order 를 포함한 dict.
         에러 시 has_break_time=False 인 기본 dict.
     """
-    if _use_mock():
-        logger.debug("브레이크타임 Mock 반환: %s", place_name)
-        return dict(_MOCK_BREAK_TIME)
-
     try:
         query = f"{place_name} {address} 브레이크타임"
         html = _fetch_naver_search(query)
         if not html:
-            return dict(_MOCK_BREAK_TIME)
+            return dict(_NO_BREAK_TIME)
         return _parse_break_time(html)
     except Exception as e:
         logger.error("브레이크타임 크롤링 실패: %s — 기본값 반환", e)
-        return dict(_MOCK_BREAK_TIME)
+        return dict(_NO_BREAK_TIME)
 
 
 def _fetch_naver_search(query: str) -> str:
@@ -89,7 +80,7 @@ def _parse_break_time(html: str) -> dict:
     Returns:
         has_break_time, break_start, break_end, last_order 를 포함한 dict.
     """
-    result = dict(_MOCK_BREAK_TIME)
+    result = dict(_NO_BREAK_TIME)
     try:
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(separator=" ")
@@ -107,8 +98,3 @@ def _parse_break_time(html: str) -> dict:
         logger.error("브레이크타임 HTML 파싱 실패: %s", e)
 
     return result
-
-
-def _use_mock() -> bool:
-    """USE_MOCK 환경 변수가 'true'로 설정되어 있으면 True를 반환한다."""
-    return os.getenv("USE_MOCK", "true").lower() == "true"

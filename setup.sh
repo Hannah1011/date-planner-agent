@@ -55,7 +55,7 @@ fi
 # 5. DB 초기화 및 시드 데이터 삽입
 echo ""
 echo "[5/5] DB 초기화 및 시드 데이터 삽입..."
-USE_MOCK=true "$VENV_DIR/bin/python" -c "
+"$VENV_DIR/bin/python" -c "
 from date_planner.memory.preference_store import init_db
 from date_planner.data.seed_data import insert_seed_data
 init_db()

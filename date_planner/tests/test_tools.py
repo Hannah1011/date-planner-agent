@@ -1,7 +1,10 @@
-"""Phase 3: API 도구 Mock 응답 스키마 및 예외처리 테스트."""
+"""Phase 3: API 도구 응답 스키마 및 예외처리 테스트.
 
-import os
+requests.get을 mock해 실제 HTTP 호출 없이 검증한다.
+"""
+
 import unittest.mock as mock
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -9,169 +12,281 @@ import requests
 from date_planner.tools.naver_search import search_places
 from date_planner.tools.google_places import get_place_details, is_place_open_now
 from date_planner.tools.weather import get_weather
-from date_planner.tools.directions import get_transit_duration, _deterministic_mock_minutes
+from date_planner.tools.directions import get_transit_duration
 from date_planner.tools.crawler import get_break_time_info
 
 
-@pytest.fixture(autouse=True)
-def force_mock_mode(monkeypatch):
-    """모든 테스트에서 Mock 모드를 강제 활성화한다."""
-    monkeypatch.setenv("USE_MOCK", "true")
+def _make_response(json_data: dict, status_code: int = 200) -> MagicMock:
+    """requests.Response를 흉내내는 Mock 객체를 생성한다."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = json_data
+    resp.text = str(json_data)
+    return resp
+
+
+# --- 네이버 검색 ---
+
+_NAVER_JSON = {
+    "items": [
+        {"title": "연남동 <b>파스타</b>집", "roadAddress": "서울 마포구 연남동 123-4",
+         "category": "음식점>이탈리안", "link": "https://example.com/a"},
+        {"title": "상수 감성 카페", "roadAddress": "서울 마포구 상수동 56-7",
+         "category": "카페>커피전문점", "link": "https://example.com/b"},
+        {"title": "홍대 레스토랑", "roadAddress": "서울 마포구 서교동 89-1",
+         "category": "음식점>양식", "link": "https://example.com/c"},
+    ]
+}
 
 
 class TestNaverSearch:
+    @pytest.fixture(autouse=True)
+    def set_env(self, monkeypatch):
+        monkeypatch.setenv("NAVER_CLIENT_ID", "test_id")
+        monkeypatch.setenv("NAVER_CLIENT_SECRET", "test_secret")
+
     def test_returns_list(self):
-        result = search_places("마포구 파스타")
+        with mock.patch("requests.get", return_value=_make_response(_NAVER_JSON)):
+            result = search_places("마포구 파스타")
         assert isinstance(result, list)
 
     def test_returns_up_to_display_count(self):
-        result = search_places("마포구 카페", display=3)
-        assert len(result) <= 3
+        two_item_json = {"items": _NAVER_JSON["items"][:2]}
+        with mock.patch("requests.get", return_value=_make_response(two_item_json)):
+            result = search_places("마포구 카페", display=2)
+        assert len(result) == 2
 
     def test_each_item_has_required_keys(self):
-        result = search_places("마포구 음식점")
+        with mock.patch("requests.get", return_value=_make_response(_NAVER_JSON)):
+            result = search_places("마포구 음식점")
         for item in result:
             assert "name" in item
             assert "address" in item
             assert "category" in item
             assert "link" in item
 
-    def test_returns_empty_list_on_api_error(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
-        monkeypatch.setenv("NAVER_CLIENT_ID", "test_id")
-        monkeypatch.setenv("NAVER_CLIENT_SECRET", "test_secret")
+    def test_strips_html_tags_from_name(self):
+        with mock.patch("requests.get", return_value=_make_response(_NAVER_JSON)):
+            result = search_places("파스타")
+        assert "<b>" not in result[0]["name"]
+
+    def test_returns_empty_list_on_api_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("timeout")):
             result = search_places("마포구 파스타")
         assert result == []
 
     def test_returns_empty_list_when_no_api_key(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
         monkeypatch.delenv("NAVER_CLIENT_ID", raising=False)
         monkeypatch.delenv("NAVER_CLIENT_SECRET", raising=False)
         result = search_places("마포구 파스타")
         assert result == []
 
 
+# --- Google Places ---
+
+_FIND_PLACE_JSON = {"candidates": [{"place_id": "ChIJmock001"}]}
+_PLACE_DETAILS_JSON = {
+    "result": {
+        "place_id": "ChIJmock001",
+        "rating": 4.2,
+        "price_level": 2,
+        "opening_hours": {
+            "open_now": True,
+            "periods": [],
+            "weekday_text": ["월요일: 10:00 – 22:00"],
+        },
+        "reviews": [{"rating": 5, "text": "맛있어요"}],
+    }
+}
+_OPEN_NOW_JSON = {"result": {"opening_hours": {"open_now": True}}}
+
+
 class TestGooglePlaces:
+    @pytest.fixture(autouse=True)
+    def set_env(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test_key")
+
     def test_get_details_returns_dict(self):
-        result = get_place_details("연남동 파스타집", "서울 마포구 연남동")
+        with mock.patch("requests.get", side_effect=[
+            _make_response(_FIND_PLACE_JSON),
+            _make_response(_PLACE_DETAILS_JSON),
+        ]):
+            result = get_place_details("연남동 파스타집", "서울 마포구 연남동")
         assert isinstance(result, dict)
 
     def test_get_details_has_required_keys(self):
-        result = get_place_details("연남동 파스타집", "서울 마포구 연남동")
+        with mock.patch("requests.get", side_effect=[
+            _make_response(_FIND_PLACE_JSON),
+            _make_response(_PLACE_DETAILS_JSON),
+        ]):
+            result = get_place_details("연남동 파스타집", "서울 마포구 연남동")
         for key in ("place_id", "rating", "price_level", "opening_hours", "reviews"):
             assert key in result
 
     def test_rating_is_float(self):
-        result = get_place_details("테스트 카페", "서울 마포구")
+        with mock.patch("requests.get", side_effect=[
+            _make_response(_FIND_PLACE_JSON),
+            _make_response(_PLACE_DETAILS_JSON),
+        ]):
+            result = get_place_details("카페", "서울 마포구")
         assert isinstance(result["rating"], float)
 
     def test_is_open_returns_bool(self):
-        result = is_place_open_now("mock_place_id_001")
+        with mock.patch("requests.get", return_value=_make_response(_OPEN_NOW_JSON)):
+            result = is_place_open_now("ChIJmock001")
         assert isinstance(result, bool)
 
-    def test_is_open_mock_returns_true(self):
-        assert is_place_open_now("any_id") is True
+    def test_is_open_returns_true_when_open(self):
+        with mock.patch("requests.get", return_value=_make_response(_OPEN_NOW_JSON)):
+            assert is_place_open_now("ChIJmock001") is True
 
-    def test_returns_empty_on_api_error(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
-        monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "fake_key")
+    def test_returns_empty_on_api_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("error")):
             result = get_place_details("카페", "서울")
         assert result == {}
 
     def test_returns_empty_when_no_api_key(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
         monkeypatch.delenv("GOOGLE_PLACES_API_KEY", raising=False)
         result = get_place_details("카페", "서울")
         assert result == {}
 
+    def test_is_open_defaults_true_on_error(self):
+        with mock.patch("requests.get", side_effect=requests.RequestException("error")):
+            result = is_place_open_now("ChIJmock001")
+        assert result is True
+
+
+# --- 날씨 ---
+
+_WEATHER_JSON = {
+    "list": [
+        {
+            "dt_txt": "2030-06-15 12:00:00",
+            "weather": [{"description": "맑음"}],
+            "main": {"temp": 22.5},
+            "pop": 0.1,
+        }
+    ]
+}
+
 
 class TestWeather:
+    @pytest.fixture(autouse=True)
+    def set_env(self, monkeypatch):
+        monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "test_key")
+
     def test_returns_dict(self):
-        result = get_weather("마포구", "2026-06-15")
+        with mock.patch("requests.get", return_value=_make_response(_WEATHER_JSON)):
+            result = get_weather("마포구", "2030-06-15")
         assert isinstance(result, dict)
 
     def test_has_required_keys(self):
-        result = get_weather("마포구", "2026-06-15")
+        with mock.patch("requests.get", return_value=_make_response(_WEATHER_JSON)):
+            result = get_weather("마포구", "2030-06-15")
         assert "condition" in result
         assert "temperature" in result
         assert "precipitation_probability" in result
 
     def test_temperature_is_numeric(self):
-        result = get_weather("강남구", "2026-06-15")
+        with mock.patch("requests.get", return_value=_make_response(_WEATHER_JSON)):
+            result = get_weather("강남구", "2030-06-15")
         assert isinstance(result["temperature"], (int, float))
 
-    def test_precipitation_probability_is_int(self):
-        result = get_weather("종로구", "2026-06-15")
+    def test_precipitation_is_int(self):
+        with mock.patch("requests.get", return_value=_make_response(_WEATHER_JSON)):
+            result = get_weather("종로구", "2030-06-15")
         assert isinstance(result["precipitation_probability"], int)
 
-    def test_returns_empty_on_api_error(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
-        monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "fake_key")
+    def test_returns_empty_on_api_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("error")):
-            result = get_weather("마포구", "2026-06-15")
+            result = get_weather("마포구", "2030-06-15")
         assert result == {}
 
-    def test_returns_empty_for_unknown_district(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
-        monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "fake_key")
-        result = get_weather("없는구", "2026-06-15")
+    def test_returns_empty_for_unknown_district(self):
+        result = get_weather("없는구", "2030-06-15")
         assert result == {}
+
+    def test_returns_empty_when_no_api_key(self, monkeypatch):
+        monkeypatch.delenv("OPENWEATHERMAP_API_KEY", raising=False)
+        result = get_weather("마포구", "2030-06-15")
+        assert result == {}
+
+
+# --- Directions ---
+
+_DIRECTIONS_JSON = {
+    "routes": [{"legs": [{"duration": {"value": 1200}}]}]
+}
 
 
 class TestDirections:
+    @pytest.fixture(autouse=True)
+    def set_env(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_DIRECTIONS_API_KEY", "test_key")
+
     def test_returns_int(self):
-        result = get_transit_duration("서울 마포구 연남동", "서울 마포구 홍대입구역")
+        with mock.patch("requests.get", return_value=_make_response(_DIRECTIONS_JSON)):
+            result = get_transit_duration("서울 마포구 연남동", "서울 마포구 홍대입구역")
         assert isinstance(result, int)
 
-    def test_mock_within_range(self):
-        result = get_transit_duration("A", "B")
-        assert 15 <= result <= 45
+    def test_returns_correct_minutes(self):
+        with mock.patch("requests.get", return_value=_make_response(_DIRECTIONS_JSON)):
+            result = get_transit_duration("A", "B")
+        assert result == 20  # 1200초 / 60 = 20분
 
-    def test_deterministic_same_input_same_output(self):
-        r1 = get_transit_duration("연남동", "홍대입구역")
-        r2 = get_transit_duration("연남동", "홍대입구역")
-        assert r1 == r2
-
-    def test_different_inputs_may_differ(self):
-        r1 = _deterministic_mock_minutes("A", "B")
-        r2 = _deterministic_mock_minutes("C", "D")
-        # 두 값이 다를 가능성이 높음 (해시 충돌 아닌 이상)
-        # 최소한 둘 다 범위 내에 있어야 함
-        assert 15 <= r1 <= 45
-        assert 15 <= r2 <= 45
-
-    def test_returns_negative_one_on_api_error(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
-        monkeypatch.setenv("GOOGLE_DIRECTIONS_API_KEY", "fake_key")
+    def test_returns_negative_one_on_api_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("error")):
             result = get_transit_duration("A", "B")
         assert result == -1
 
     def test_returns_negative_one_when_no_api_key(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
         monkeypatch.delenv("GOOGLE_DIRECTIONS_API_KEY", raising=False)
         result = get_transit_duration("A", "B")
         assert result == -1
 
+    def test_returns_negative_one_when_no_routes(self):
+        with mock.patch("requests.get", return_value=_make_response({"routes": []})):
+            result = get_transit_duration("A", "B")
+        assert result == -1
+
+
+# --- 크롤러 ---
+
+_BREAK_TIME_HTML = """
+<html><body>
+브레이크타임 14:00 - 17:00 라스트 오더 21:30
+</body></html>
+"""
+
 
 class TestCrawler:
     def test_returns_dict(self):
-        result = get_break_time_info("연남동 파스타집", "서울 마포구 연남동")
+        with mock.patch("requests.get", return_value=_make_response({})) as m:
+            m.return_value.text = "<html><body></body></html>"
+            m.return_value.raise_for_status.return_value = None
+            result = get_break_time_info("카페", "서울 마포구")
         assert isinstance(result, dict)
 
     def test_has_required_keys(self):
-        result = get_break_time_info("테스트 식당", "서울 마포구")
+        with mock.patch("requests.get") as m:
+            m.return_value.raise_for_status.return_value = None
+            m.return_value.text = "<html><body></body></html>"
+            result = get_break_time_info("카페", "서울 마포구")
         for key in ("has_break_time", "break_start", "break_end", "last_order"):
             assert key in result
 
-    def test_mock_has_no_break_time(self):
-        result = get_break_time_info("아무 식당", "서울 강남구")
-        assert result["has_break_time"] is False
+    def test_parses_break_time_from_html(self):
+        with mock.patch("requests.get") as m:
+            m.return_value.raise_for_status.return_value = None
+            m.return_value.text = _BREAK_TIME_HTML
+            result = get_break_time_info("테스트 식당", "서울 마포구")
+        assert result["has_break_time"] is True
+        assert result["break_start"] == "14:00"
+        assert result["break_end"] == "17:00"
+        assert result["last_order"] == "21:30"
 
-    def test_returns_default_on_request_error(self, monkeypatch):
-        monkeypatch.setenv("USE_MOCK", "false")
+    def test_returns_default_on_request_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("error")):
             result = get_break_time_info("카페", "서울")
         assert result["has_break_time"] is False
