@@ -1,0 +1,146 @@
+"""데이트 코스 플래너 — CLI 실행 진입점.
+
+사용법:
+    python main.py              # 샘플 입력으로 코스 생성
+    python main.py --seed       # 시드 데이터 삽입 후 코스 생성
+"""
+
+import argparse
+import os
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from date_planner.agents.feedback_replan import apply_feedback_to_candidates, process_feedback
+from date_planner.agents.input_collector import build_search_query, parse_user_request
+from date_planner.agents.memory_agent import load_context
+from date_planner.agents.route_planner import build_course, is_within_budget
+from date_planner.agents.search_agent import filter_open_places, search_candidates
+from date_planner.config.constants import CafeStyle, Mood, TimeSlot
+from date_planner.memory.preference_store import init_db
+from date_planner.utils.logger import get_logger
+
+load_dotenv()
+logger = get_logger(__name__)
+
+_SAMPLE_INPUT = {
+    "district": "마포구",
+    "date": (date.today() + timedelta(days=1)).isoformat(),
+    "time_slot": TimeSlot.AFTERNOON.value,
+    "mood": Mood.FOOD_EXPLORATION.value,
+    "food_preferences": ["파스타", "카페"],
+    "cafe_style": CafeStyle.COZY.value,
+    "budget": 60000,
+    "activities": [],
+}
+
+
+def run(raw_input: dict) -> None:
+    """데이트 코스 생성 파이프라인을 실행한다.
+
+    Input Collector -> Memory -> Search -> Route Planner -> Feedback 순서로
+    Agent를 순차 호출하며, 사용자 입력이 없는 CLI 모드에서는 자동 승인한다.
+
+    Args:
+        raw_input: 사용자 조건 dict.
+    """
+    # Step 1: 입력 검증 및 구조화
+    try:
+        request = parse_user_request(raw_input)
+        logger.info("요청 파싱 완료: %s %s %s", request.district, request.date, request.time_slot)
+    except ValueError as e:
+        logger.error("입력 오류: %s", e)
+        sys.exit(1)
+
+    # Step 2: 취향 맥락 로드
+    preference_context = load_context()
+    if preference_context:
+        print("\n[취향 맥락]")
+        print(preference_context)
+
+    # Step 3: 장소 검색
+    candidates = search_candidates(request)
+    open_candidates = filter_open_places(candidates)
+    logger.info("영업 중 후보: %d개", len(open_candidates))
+
+    # Step 4: 코스 구성
+    replan_count = 0
+    current_candidates = open_candidates
+
+    while True:
+        course = build_course(current_candidates, request)
+
+        if not course.stops:
+            logger.warning("생성된 코스 없음 — 종료")
+            print("\n조건에 맞는 코스를 생성할 수 없습니다. 조건을 변경해 주세요.")
+            break
+
+        _print_course(course, replan_count)
+
+        # CLI 모드: 자동 승인 (UI 없음)
+        result = process_feedback(course, True, "", replan_count, request)
+        if result.accepted:
+            print("\n코스가 저장되었습니다.")
+            break
+
+        if result.suggest_new_conditions:
+            print("\n리플랜 횟수를 초과했습니다. 날짜나 지역을 변경해 보세요.")
+            break
+
+        current_candidates = apply_feedback_to_candidates(current_candidates, result.reason)
+        replan_count = result.replan_count
+
+
+def _print_course(course, replan_count: int) -> None:
+    """코스 정보를 콘솔에 출력한다."""
+    suffix = f" (리플랜 {replan_count}회)" if replan_count > 0 else ""
+    print(f"\n{'=' * 50}")
+    print(f"추천 데이트 코스{suffix}")
+    print(f"{'=' * 50}")
+
+    if course.weather_note:
+        print(f"날씨: {course.weather_note}\n")
+
+    for stop in course.stops:
+        transit_str = f"  (이전 장소에서 {stop.transit_minutes_from_prev}분)" if stop.transit_minutes_from_prev else ""
+        print(f"{stop.visit_order}. {stop.place.name}{transit_str}")
+        print(f"   주소: {stop.place.address}")
+        print(f"   카테고리: {stop.place.category} | 별점: {stop.place.rating}")
+        print(f"   예상 비용: {stop.estimated_cost:,}원")
+
+    print(f"\n총 이동 시간: {course.total_transit_minutes}분")
+    print(f"총 예상 비용: {course.total_estimated_cost:,}원")
+    print(f"{'=' * 50}")
+
+
+def _parse_args() -> argparse.Namespace:
+    """CLI 인수를 파싱한다."""
+    parser = argparse.ArgumentParser(description="데이트 코스 플래너")
+    parser.add_argument("--seed", action="store_true", help="시드 데이터 삽입 후 실행")
+    return parser.parse_args()
+
+
+def main() -> None:
+    """메인 진입점."""
+    args = _parse_args()
+
+    try:
+        init_db()
+    except Exception as e:
+        logger.error("DB 초기화 실패: %s", e)
+        sys.exit(1)
+
+    if args.seed:
+        try:
+            from date_planner.data.seed_data import insert_seed_data
+            insert_seed_data()
+        except Exception as e:
+            logger.error("시드 데이터 삽입 실패: %s", e)
+
+    run(_SAMPLE_INPUT)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,16 @@
+# --- 핵심 의존성 (Python 3.9+) ---
+openai>=1.0.0
+streamlit>=1.35.0
+folium>=0.16.0
+streamlit-folium>=0.20.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+python-dotenv>=1.0.0
+
+# --- 테스트 ---
+pytest>=8.0.0
+pytest-mock>=3.14.0
+
+# --- CrewAI (Python 3.10+ 필요, 선택 설치) ---
+# Python 3.10 이상 환경에서 실제 CrewAI Crew 조합 시 설치:
+# pip install crewai>=0.80.0
