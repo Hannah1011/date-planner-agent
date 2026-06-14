@@ -61,6 +61,5 @@ class DateCourse:
     def summary(self) -> str:
         """코스 요약 텍스트를 반환한다."""
         parts = [f"{i + 1}. {s.place.name} ({s.place.category})" for i, s in enumerate(self.stops)]
-        cost_str = f"{self.total_estimated_cost:,}원"
         transit_str = f"총 이동 {self.total_transit_minutes}분"
-        return " → ".join(parts) + f" | {transit_str} | 예상 {cost_str}"
+        return " → ".join(parts) + f" | {transit_str}"

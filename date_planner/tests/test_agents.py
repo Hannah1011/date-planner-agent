@@ -12,14 +12,21 @@ from date_planner.agents.models import CourseStop, DateCourse, PlaceCandidate, U
 from date_planner.agents.input_collector import parse_user_request, build_search_query
 from date_planner.agents.search_agent import (
     _build_queries,
+    _choose_coordinates,
     _enrich_candidates,
+    _matches_query_district,
     search_candidates,
+    search_replan_candidates,
     filter_open_places,
 )
 from date_planner.agents.route_planner import build_course, is_within_budget
 from date_planner.agents.memory_agent import load_context, save_accepted_course
 from date_planner.agents.course_narrator import generate_course_description
-from date_planner.agents.feedback_replan import process_feedback, apply_feedback_to_candidates
+from date_planner.agents.feedback_replan import (
+    analyze_feedback,
+    process_feedback,
+    apply_feedback_to_candidates,
+)
 from date_planner.config.constants import CafeStyle, Mood, TimeSlot
 
 
@@ -140,6 +147,16 @@ class TestInputCollector:
                                      "moods": ["FOOD_EXPLORATION", "COZY_CAFE"]})
         assert len(result.moods) == 2
 
+    def test_ignores_food_preferences_for_unrelated_mood(self):
+        future = (date.today() + timedelta(days=1)).isoformat()
+        result = parse_user_request({
+            "district": "마포구",
+            "date": future,
+            "moods": ["NEW_ACTIVITY"],
+            "food_preferences": ["파스타"],
+        })
+        assert result.food_preferences == []
+
     def test_build_search_query_with_preferences(self, sample_request):
         query = build_search_query(sample_request)
         assert "마포구" in query
@@ -173,6 +190,10 @@ class TestSearchAgent:
     def test_filter_open_places_empty_input(self):
         assert filter_open_places([]) == []
 
+    def test_future_date_does_not_filter_by_open_now(self, sample_candidates):
+        future = (date.today() + timedelta(days=1)).isoformat()
+        assert filter_open_places(sample_candidates, future) == sample_candidates
+
     def test_build_queries_searches_popup_and_shopping_for_selected_moods(self, sample_request):
         sample_request.moods = [Mood.NEW_ACTIVITY, Mood.SHOPPING_STREET]
         queries = _build_queries(sample_request)
@@ -181,6 +202,33 @@ class TestSearchAgent:
         assert "전시회" in query_text
         assert "편집샵" in query_text
         assert "쇼핑몰" in query_text
+
+    def test_build_queries_ignores_food_and_cafe_for_unrelated_moods(self, sample_request):
+        sample_request.moods = [Mood.NEW_ACTIVITY, Mood.SHOPPING_STREET]
+        queries = _build_queries(sample_request)
+        category_types = {category_type for _, category_type, _ in queries}
+        assert "food" not in category_types
+        assert "cafe" not in category_types
+
+    def test_build_queries_uses_cafe_style_only_for_cafe_mood(self, sample_request):
+        sample_request.moods = [Mood.COZY_CAFE]
+        sample_request.food_preferences = []
+        queries = _build_queries(sample_request)
+        assert any("감성 카페" in query for query, _, _ in queries)
+
+    def test_replan_search_uses_feedback_keywords(self, sample_request, monkeypatch):
+        searched_queries = []
+        monkeypatch.setattr(
+            "date_planner.agents.search_agent.search_places",
+            lambda query, display=5: searched_queries.append(query) or [],
+        )
+        search_replan_candidates(sample_request, ["산", "등산"])
+        assert "마포구 산" in searched_queries
+        assert "마포구 등산" in searched_queries
+
+    def test_search_excludes_result_from_another_district(self):
+        assert _matches_query_district("관악구 공원", "서울특별시 강남구 테헤란로 1") is False
+        assert _matches_query_district("관악구 공원", "서울특별시 관악구 관악로 1") is True
 
     def test_activity_search_excludes_restaurant_results(self):
         raw_results = [
@@ -197,6 +245,48 @@ class TestSearchAgent:
         ]
         result = _enrich_candidates(raw_results)
         assert [candidate.name for candidate in result] == ["성수 편집샵"]
+
+    def test_naver_coordinates_win_when_google_matches_wrong_branch(self):
+        coords = _choose_coordinates(
+            "신림점",
+            37.4819534,
+            126.9293863,
+            37.486339,
+            126.9277249,
+        )
+        assert coords == (37.4819534, 126.9293863)
+
+    def test_google_coordinates_are_fallback_when_naver_coordinates_missing(self):
+        coords = _choose_coordinates("장소", 0.0, 0.0, 37.481, 126.929)
+        assert coords == (37.481, 126.929)
+
+    def test_same_name_different_addresses_are_not_merged(self):
+        raw_results = [
+            (
+                {
+                    "name": "같은 이름",
+                    "address": "서울 관악구 주소 1",
+                    "category": "전시",
+                    "lat": 37.48,
+                    "lon": 126.93,
+                },
+                "activity",
+                Mood.NEW_ACTIVITY.value,
+            ),
+            (
+                {
+                    "name": "같은 이름",
+                    "address": "서울 관악구 주소 2",
+                    "category": "전시",
+                    "lat": 37.49,
+                    "lon": 126.94,
+                },
+                "activity",
+                Mood.NEW_ACTIVITY.value,
+            ),
+        ]
+        result = _enrich_candidates(raw_results)
+        assert len(result) == 2
 
 
 class TestRoutePlanner:
@@ -218,7 +308,7 @@ class TestRoutePlanner:
         assert is_within_budget(sample_course, 100000) is True
 
     def test_is_within_budget_false(self, sample_course):
-        assert is_within_budget(sample_course, 10000) is False
+        assert is_within_budget(sample_course, 10000) is True
 
     def test_course_summary_contains_place_name(self, sample_course):
         assert "연남동 파스타집" in sample_course.summary()
@@ -317,7 +407,8 @@ class TestCourseNarrator:
             sample_request,
             "사용자 취향 정보:\n- 선호:\n  * 카페: 감성 카페",
         )
-        assert description.startswith("저장된 취향과 이번 선택을 분석해보니")
+        assert description.startswith("이번 요청에서 드시고 싶은 음식은")
+        assert "저장된 취향 기록을 보면 감성 카페도 선호하셨어요." in description
         assert "그래서 이번 코스는" in description
         assert description.endswith(".")
 
@@ -326,7 +417,17 @@ class TestCourseNarrator:
     ):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         description = generate_course_description(sample_course, sample_request)
-        assert description.startswith("이번 선택을 분석해보니")
+        assert description.startswith("이번 요청에서 드시고 싶은 음식은")
+        assert "아직 저장된 취향 기록은 없어" in description
+
+    def test_template_explains_feedback_replan(self, sample_course, sample_request, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        description = generate_course_description(
+            sample_course,
+            sample_request,
+            feedback_reason="공원 대신 산을 가고 싶어",
+        )
+        assert description.startswith("말씀해주신 피드백을 반영해")
 
 
 class TestFeedbackReplan:
@@ -355,3 +456,18 @@ class TestFeedbackReplan:
 
     def test_apply_feedback_empty_reason_unchanged(self, sample_candidates):
         assert apply_feedback_to_candidates(sample_candidates, "") == sample_candidates
+
+    def test_analyze_feedback_finds_mountain_alternative(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        analysis = analyze_feedback("공원도 좋지만 이번에는 산을 가보고 싶어")
+        assert "공원" in analysis.exclude_keywords
+        assert "산" in analysis.search_keywords
+        assert "공원" not in analysis.search_keywords
+
+    def test_apply_feedback_excludes_current_course_places(self, sample_candidates):
+        result = apply_feedback_to_candidates(
+            sample_candidates,
+            "다른 곳을 가고 싶어",
+            excluded_place_names={"연남동 파스타집"},
+        )
+        assert "연남동 파스타집" not in {candidate.name for candidate in result}

@@ -4,6 +4,9 @@ Goal Setting & Monitoring + HITL + 부분적 Reflection 패턴.
 """
 
 from dataclasses import dataclass
+import json
+import os
+from typing import Optional
 
 from date_planner.agents.models import DateCourse, PlaceCandidate, UserRequest
 from date_planner.agents.memory_agent import save_accepted_course, save_rejected_course
@@ -25,6 +28,15 @@ class FeedbackResult:
     reason: str
     suggest_new_conditions: bool
     replan_count: int
+
+
+@dataclass
+class FeedbackAnalysis:
+    """거절 이유에서 추출한 리플랜 방향."""
+
+    summary: str
+    exclude_keywords: list[str]
+    search_keywords: list[str]
 
 
 def process_feedback(
@@ -90,6 +102,8 @@ def process_feedback(
 def apply_feedback_to_candidates(
     candidates: list[PlaceCandidate],
     reason: str,
+    excluded_place_names: Optional[set[str]] = None,
+    analysis: Optional[FeedbackAnalysis] = None,
 ) -> list[PlaceCandidate]:
     """거절 이유를 분석해 후보 장소 리스트에서 문제 장소를 제외한다.
 
@@ -105,13 +119,14 @@ def apply_feedback_to_candidates(
     if not reason:
         return candidates
 
-    dislike_keywords = _extract_dislike_keywords(reason)
-    if not dislike_keywords:
-        return candidates
+    analysis = analysis or _analyze_feedback_with_rules(reason)
+    dislike_keywords = analysis.exclude_keywords
+    excluded_place_names = excluded_place_names or set()
 
     filtered = [
         c for c in candidates
-        if not any(kw in c.name or kw in c.category for kw in dislike_keywords)
+        if c.name not in excluded_place_names
+        and not any(kw in c.name or kw in c.category for kw in dislike_keywords)
     ]
     logger.info(
         "Reflection 필터 적용: 제외 키워드=%s, %d -> %d개",
@@ -120,6 +135,102 @@ def apply_feedback_to_candidates(
         len(filtered),
     )
     return filtered
+
+
+def analyze_feedback(reason: str, course: Optional[DateCourse] = None) -> FeedbackAnalysis:
+    """LLM으로 거절 이유를 분석하고 새 검색 방향을 생성한다."""
+    if not reason.strip():
+        return FeedbackAnalysis("", [], [])
+
+    llm_analysis = _analyze_feedback_with_gpt(reason, course)
+    if llm_analysis:
+        return llm_analysis
+    return _analyze_feedback_with_rules(reason)
+
+
+def _analyze_feedback_with_gpt(
+    reason: str,
+    course: Optional[DateCourse],
+) -> Optional[FeedbackAnalysis]:
+    """거절 이유를 구조화된 JSON으로 분석한다."""
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+
+    try:
+        from openai import OpenAI
+
+        current_course = ", ".join(stop.place.name for stop in course.stops) if course else "정보 없음"
+        response = OpenAI(api_key=api_key).chat.completions.create(
+            model=MODEL_CONFIG[_AGENT_KEY],
+            messages=[{
+                "role": "user",
+                "content": (
+                    "데이트 코스 거절 이유를 분석해 JSON만 반환하세요.\n"
+                    "exclude_keywords: 사용자가 피하고 싶은 장소/카테고리 키워드\n"
+                    "search_keywords: 새로 검색해야 할 구체적인 장소/활동 키워드\n"
+                    "summary: 반영할 변경 방향을 한국어 한 문장으로 요약\n"
+                    "예: '공원도 좋지만 이번에는 산을 가고 싶어'라면 "
+                    '{"exclude_keywords":["공원"],"search_keywords":["산","등산"],'
+                    '"summary":"공원 대신 산이나 등산 코스를 찾습니다."}\n'
+                    f"현재 거절된 코스 장소: {current_course}\n"
+                    f"거절 이유: {reason}"
+                ),
+            }],
+            response_format={"type": "json_object"},
+            max_tokens=250,
+            temperature=0,
+        )
+        data = json.loads(response.choices[0].message.content)
+        return FeedbackAnalysis(
+            summary=str(data.get("summary", "")).strip(),
+            exclude_keywords=_clean_keywords(data.get("exclude_keywords", [])),
+            search_keywords=_clean_keywords(data.get("search_keywords", [])),
+        )
+    except Exception as e:
+        logger.warning("피드백 LLM 분석 실패 — 규칙 기반 분석으로 폴백: %s", e)
+        return None
+
+
+def _analyze_feedback_with_rules(reason: str) -> FeedbackAnalysis:
+    """자주 쓰는 대체 표현을 규칙 기반으로 분석한다."""
+    exclude_keywords = _extract_dislike_keywords(reason)
+    search_keywords: list[str] = []
+
+    alternatives = {
+        "산": ["산", "등산", "둘레길"],
+        "전시": ["전시회", "미술관"],
+        "팝업": ["팝업스토어"],
+        "쇼핑": ["편집샵", "쇼핑몰"],
+        "카페": ["카페"],
+        "맛집": ["맛집"],
+        "공원": ["공원"],
+    }
+    for marker, keywords in alternatives.items():
+        if marker in reason and not any(marker in keyword for keyword in exclude_keywords):
+            search_keywords.extend(keywords)
+
+    if "공원" in reason and any(marker in reason for marker in ("대신", "이번에는", "말고")):
+        exclude_keywords.append("공원")
+
+    exclude_keywords = list(dict.fromkeys(exclude_keywords))
+    search_keywords = [
+        keyword
+        for keyword in dict.fromkeys(search_keywords)
+        if not any(excluded in keyword for excluded in exclude_keywords)
+    ]
+    if search_keywords:
+        summary = f"피드백을 반영해 {', '.join(search_keywords[:3])} 관련 장소를 새로 찾습니다."
+    else:
+        summary = "피드백을 반영해 기존 코스와 다른 장소를 새로 찾습니다."
+    return FeedbackAnalysis(summary, exclude_keywords, search_keywords)
+
+
+def _clean_keywords(values) -> list[str]:
+    """LLM JSON의 키워드 리스트를 정리한다."""
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))[:5]
 
 
 def _handle_accepted(course: DateCourse, reason: str = "") -> None:

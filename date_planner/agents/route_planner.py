@@ -1,4 +1,4 @@
-"""Route Planner Agent: 대중교통 최적화 + 날씨 반영 + 예산 체크.
+"""Route Planner Agent: 대중교통 최적화 + 날씨 반영.
 
 Planning + Guardrails 패턴.
 
@@ -37,14 +37,6 @@ _TIME_SLOT_PLACE_COUNT: dict[TimeSlot, int] = {
     TimeSlot.ALL_DAY: 5,
 }
 
-_PRICE_LEVEL_COST: dict[int, int] = {
-    0: 10000,
-    1: 15000,
-    2: 25000,
-    3: 50000,
-    4: 80000,
-}
-
 # 카테고리 분류 키워드
 _FOOD_KEYWORDS = ("음식", "식당", "레스토랑", "맛집", "한식", "양식", "이탈리안",
                   "중식", "일식", "분식", "고기", "포차", "술집")
@@ -74,26 +66,23 @@ def build_course(candidates: list[PlaceCandidate], request: UserRequest) -> Date
     weather_note = _get_weather_note(request.district, request.date)
 
     total_transit = sum(s.transit_minutes_from_prev for s in stops)
-    total_cost = sum(s.estimated_cost for s in stops)
-
     if total_transit > RECOMMENDED_TOTAL_TRANSIT:
         logger.warning("총 이동 시간 권고 초과: %d분", total_transit)
 
     course = DateCourse(
         stops=stops,
         total_transit_minutes=total_transit,
-        total_estimated_cost=total_cost,
+        total_estimated_cost=0,
         weather_note=weather_note,
         session_id=str(uuid.uuid4()),
     )
     logger.info(
-        "코스 구성 완료: %d개 장소 (food=%d, cafe=%d, activity=%d), 이동 %d분, 비용 %d원",
+        "코스 구성 완료: %d개 장소 (food=%d, cafe=%d, activity=%d), 이동 %d분",
         len(stops),
         sum(1 for s in stops if _classify_place_type(s.place) == "food"),
         sum(1 for s in stops if _classify_place_type(s.place) == "cafe"),
         sum(1 for s in stops if _classify_place_type(s.place) == "activity"),
         total_transit,
-        total_cost,
     )
     return course
 
@@ -252,12 +241,11 @@ def _build_stops(places: list[PlaceCandidate]) -> list[CourseStop]:
             if transit_minutes == -1:
                 transit_minutes = 0
 
-        estimated_cost = _PRICE_LEVEL_COST.get(place.price_level, 15000)
         stops.append(
             CourseStop(
                 place=place,
                 transit_minutes_from_prev=transit_minutes,
-                estimated_cost=estimated_cost,
+                estimated_cost=0,
                 visit_order=i + 1,
             )
         )
@@ -302,23 +290,8 @@ def _empty_course() -> DateCourse:
 
 
 def is_within_budget(course: DateCourse, budget: int) -> bool:
-    """코스 총 비용이 예산 이내인지 확인한다.
-
-    Args:
-        course: 완성된 DateCourse.
-        budget: 사용자 예산 (원).
-
-    Returns:
-        예산 이내면 True.
-    """
-    within = course.total_estimated_cost <= budget
-    if not within:
-        logger.warning(
-            "예산 초과: 예상 %d원 > 예산 %d원",
-            course.total_estimated_cost,
-            budget,
-        )
-    return within
+    """레거시 호환 함수. 현재 코스는 비용을 계산하지 않는다."""
+    return True
 
 
 def get_model_name() -> str:

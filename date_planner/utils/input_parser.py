@@ -1,7 +1,4 @@
-"""Input Collector Agent: 사용자 온보딩 질문 수행 및 조건 구조화.
-
-Prompt Chaining + HITL 패턴. GPT-4o-mini 사용.
-"""
+"""사용자 입력을 검증하고 UserRequest로 구조화하는 전처리 컴포넌트."""
 
 from date_planner.agents.models import UserRequest
 from date_planner.config.constants import CafeStyle, Mood, TimeSlot
@@ -37,6 +34,10 @@ def parse_user_request(raw_input: dict) -> UserRequest:
 
     time_slots = _parse_time_slots(raw_input)
     moods = _parse_moods(raw_input)
+    accepts_food_preferences = any(
+        mood in moods for mood in (Mood.FOOD_EXPLORATION, Mood.COZY_CAFE)
+    )
+    food_preferences = raw_input.get("food_preferences", []) if accepts_food_preferences else []
 
     try:
         cafe_style = CafeStyle(raw_input.get("cafe_style", CafeStyle.COZY.value))
@@ -49,7 +50,7 @@ def parse_user_request(raw_input: dict) -> UserRequest:
         date=raw_input.get("date", ""),
         time_slots=time_slots,
         moods=moods,
-        food_preferences=raw_input.get("food_preferences", []),
+        food_preferences=food_preferences,
         cafe_style=cafe_style,
         activities=raw_input.get("activities", []),
     )
@@ -142,5 +143,5 @@ def build_search_query(request: UserRequest) -> str:
 
 
 def get_model_name() -> str:
-    """Input Collector Agent에 할당된 모델 이름을 반환한다."""
+    """레거시 모델 설정 값을 반환한다. 현재 입력 파싱에서는 LLM을 호출하지 않는다."""
     return MODEL_CONFIG[_AGENT_KEY]

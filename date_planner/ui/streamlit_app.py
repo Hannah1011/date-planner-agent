@@ -6,7 +6,7 @@
   3. 코스 생성 버튼 -> Agent 파이프라인 실행
   4. 에이전트 실행 로그 + 코스 출력 + 지도
   5. 승인(이유 입력)/거절 HITL 체크포인트
-  6. 거절 시 이유 입력 -> 리플랜 (필터링 상세 표시)
+  6. 거절 시 이유 입력 -> 피드백 분석 및 새 장소 검색 -> 리플랜
   7. 하단: 취향 관리 (추가/수정/삭제)
 """
 
@@ -26,10 +26,18 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from date_planner.agents.course_narrator import generate_course_description
-from date_planner.agents.feedback_replan import apply_feedback_to_candidates, process_feedback
+from date_planner.agents.feedback_replan import (
+    analyze_feedback,
+    apply_feedback_to_candidates,
+    process_feedback,
+)
 from date_planner.agents.memory_agent import load_context
 from date_planner.agents.route_planner import build_course
-from date_planner.agents.search_agent import filter_open_places, search_candidates
+from date_planner.agents.search_agent import (
+    filter_open_places,
+    search_candidates,
+    search_replan_candidates,
+)
 from date_planner.config.constants import CafeStyle, Mood, TimeSlot
 from date_planner.memory.preference_store import (
     delete_preference,
@@ -38,7 +46,7 @@ from date_planner.memory.preference_store import (
     save_preference,
     update_preference,
 )
-from date_planner.tools.google_places import search_place_suggestions
+from date_planner.tools.naver_search import search_place_suggestions
 from date_planner.ui.map_selector import render_district_selector
 from date_planner.utils.input_parser import parse_user_request
 from date_planner.utils.logger import get_logger
@@ -64,6 +72,15 @@ _TIME_SLOT_END_HOUR = {
     TimeSlot.ALL_DAY: 14,
 }
 
+_ALL_TIME_SLOTS = [
+    TimeSlot.MORNING,
+    TimeSlot.LUNCH,
+    TimeSlot.AFTERNOON,
+    TimeSlot.EVENING,
+    TimeSlot.NIGHT,
+    TimeSlot.ALL_DAY,
+]
+
 _MOOD_LABELS = {
     Mood.NATURE_HEALING: "자연 & 힐링",
     Mood.FOOD_EXPLORATION: "맛있는 거 탐방",
@@ -79,7 +96,7 @@ _CAFE_STYLE_LABELS = {
     CafeStyle.FRANCHISE: "대형 프랜차이즈",
 }
 
-_PREF_CATEGORIES = ["음식점", "카페", "액티비티", "관광", "무드", "카페 스타일", "지역", "기타"]
+_PREF_CATEGORIES = ["음식점", "카페", "액티비티", "관광", "무드", "지역", "기타"]
 
 
 def main() -> None:
@@ -91,7 +108,7 @@ def main() -> None:
     st.title("데이트 코스 플래너")
     st.caption("날짜, 지역, 무드를 설정하면 맞춤 데이트 코스를 추천해 드립니다.")
 
-    with st.form("course_form"):
+    with st.container(border=True):
         col1, col2 = st.columns([1, 1])
 
         with col1:
@@ -100,26 +117,37 @@ def main() -> None:
 
         with col2:
             st.subheader("날짜 & 조건")
+            today = date.today()
+            week_end = _get_week_end(today)
+            default_date = min(today + timedelta(days=1), week_end)
             selected_date = st.date_input(
                 "날짜",
-                value=date.today() + timedelta(days=1),
-                min_value=date.today(),
+                value=default_date,
+                min_value=today,
+                max_value=week_end,
             )
+            st.caption(f"오늘부터 이번 주 토요일({week_end.isoformat()})까지만 선택할 수 있습니다.")
 
             available_slots = _get_available_time_slots(selected_date)
             available_labels = [_TIME_SLOT_LABELS[ts] for ts in available_slots]
-            default_label = available_labels[0] if available_labels else _TIME_SLOT_LABELS[TimeSlot.ALL_DAY]
 
             st.caption("시간대 (복수 선택 가능)")
-            selected_ts_labels = st.multiselect(
-                "시간대",
-                options=available_labels,
-                default=[default_label],
-                label_visibility="collapsed",
-            )
-            time_slots = [ts for ts in available_slots if _TIME_SLOT_LABELS[ts] in selected_ts_labels]
-            if not time_slots:
-                time_slots = available_slots[:1] if available_slots else [TimeSlot.ALL_DAY]
+            if available_labels:
+                selected_ts_labels = st.multiselect(
+                    "시간대",
+                    options=available_labels,
+                    default=[available_labels[0]],
+                    label_visibility="collapsed",
+                )
+                time_slots = [
+                    ts for ts in available_slots
+                    if _TIME_SLOT_LABELS[ts] in selected_ts_labels
+                ]
+                if not time_slots:
+                    time_slots = available_slots[:1]
+            else:
+                st.warning("오늘 선택 가능한 시간대가 모두 지났습니다. 다른 날짜를 선택해 주세요.")
+                time_slots = []
 
             st.caption("무드 (복수 선택 가능)")
             mood_options = list(_MOOD_LABELS.keys())
@@ -134,17 +162,37 @@ def main() -> None:
             if not moods:
                 moods = [Mood.FOOD_EXPLORATION]
 
+            accepts_food_input = any(
+                mood in moods for mood in (Mood.FOOD_EXPLORATION, Mood.COZY_CAFE)
+            )
             food_prefs = st.text_input(
                 "먹고 싶은 것 (쉼표로 구분, 비우면 무드 기반 추천)",
                 placeholder="파스타, 초밥",
+                disabled=not accepts_food_input,
             )
-            cafe_style = _select_enum("카페 스타일", _CAFE_STYLE_LABELS, CafeStyle.COZY)
+            if not accepts_food_input:
+                food_prefs = ""
+                st.caption("맛있는 거 탐방 또는 느긋한 카페 투어 무드를 선택하면 입력할 수 있습니다.")
 
-        submitted = st.form_submit_button("코스 생성", type="primary")
+            accepts_cafe_style = Mood.COZY_CAFE in moods
+            cafe_style = _select_enum(
+                "카페 스타일",
+                _CAFE_STYLE_LABELS,
+                CafeStyle.COZY,
+                disabled=not accepts_cafe_style,
+            )
+            if not accepts_cafe_style:
+                cafe_style = CafeStyle.COZY
+                st.caption("느긋한 카페 투어 무드를 선택하면 카페 스타일을 고를 수 있습니다.")
+
+        submitted = st.button("코스 생성", type="primary")
 
     if submitted:
         if not district:
             st.warning("지역을 선택해 주세요.")
+            return
+        if not time_slots:
+            st.warning("선택 가능한 시간대가 없습니다. 다른 날짜를 선택해 주세요.")
             return
         _generate_course(district, selected_date, time_slots, moods, food_prefs, cafe_style)
 
@@ -160,20 +208,31 @@ def main() -> None:
     _render_preference_manager()
 
 
-def _get_available_time_slots(selected_date) -> list:
+def _get_week_end(current_date: date) -> date:
+    """현재 주의 토요일 날짜를 반환한다."""
+    days_until_saturday = (5 - current_date.weekday()) % 7
+    return current_date + timedelta(days=days_until_saturday)
+
+
+def _get_available_time_slots(
+    selected_date: date,
+    current_time: Optional[datetime] = None,
+) -> list:
     """선택한 날짜에서 선택 가능한 시간대를 반환한다.
 
     오늘이면 현재 시각 이후 슬롯만, 미래면 전체 슬롯 반환.
     """
-    all_slots = [
-        TimeSlot.MORNING, TimeSlot.LUNCH, TimeSlot.AFTERNOON,
-        TimeSlot.EVENING, TimeSlot.NIGHT, TimeSlot.ALL_DAY,
+    now = current_time or datetime.now()
+    if selected_date > now.date():
+        return list(_ALL_TIME_SLOTS)
+    if selected_date < now.date():
+        return []
+    return [
+        time_slot
+        for time_slot in _ALL_TIME_SLOTS
+        if time_slot != TimeSlot.ALL_DAY or now.hour < 10
+        if _TIME_SLOT_END_HOUR[time_slot] > now.hour
     ]
-    if selected_date > date.today():
-        return all_slots
-    now_hour = datetime.now().hour
-    available = [ts for ts in all_slots if _TIME_SLOT_END_HOUR[ts] > now_hour]
-    return available if available else [TimeSlot.NIGHT]
 
 
 def _generate_course(
@@ -219,10 +278,15 @@ def _generate_course(
 
             # Step 2: Search Agent
             st.write("**[2/4] Search Agent** — 선택 무드별 장소를 병렬 검색 중...")
-            food_query = food_list[0] if food_list else "맛집"
-            st.caption(f"  기본 검색: '{district} {food_query}' + 선택 무드별 전용 검색어")
+            detail_conditions = []
+            if food_list:
+                detail_conditions.append(f"먹고 싶은 것: {', '.join(food_list)}")
+            if Mood.COZY_CAFE in moods:
+                detail_conditions.append(f"카페 스타일: {_CAFE_STYLE_LABELS[cafe_style]}")
+            detail_text = f" / 상세 조건: {' / '.join(detail_conditions)}" if detail_conditions else ""
+            st.caption(f"  선택 무드별 전용 검색어{detail_text}")
             candidates = search_candidates(request)
-            open_candidates = filter_open_places(candidates)
+            open_candidates = filter_open_places(candidates, request.date)
             food_cnt = sum(1 for c in open_candidates if c.category_type == "food")
             cafe_cnt = sum(1 for c in open_candidates if c.category_type == "cafe")
             act_cnt = sum(1 for c in open_candidates if c.category_type == "activity")
@@ -304,6 +368,8 @@ def _render_agent_log() -> None:
             cols[0].caption(f"**{agent}**")
             cols[1].caption(detail)
             cols[2].caption(f"→ {result}")
+        if not any(agent == "Feedback & Replan Agent" for agent, _, _ in log):
+            st.caption("Feedback & Replan Agent는 코스를 거절했을 때만 실행됩니다.")
 
 
 def _render_course() -> None:
@@ -467,35 +533,52 @@ def _render_hitl() -> None:
 
             candidates = st.session_state.get("candidates", [])
             before_names = {c.name for c in candidates}
-            filtered = apply_feedback_to_candidates(candidates, reason)
+            current_course_names = {stop.place.name for stop in course.stops}
+            analysis = analyze_feedback(reason, course)
+            filtered = apply_feedback_to_candidates(
+                candidates,
+                reason,
+                excluded_place_names=current_course_names,
+                analysis=analysis,
+            )
+            fresh_candidates = apply_feedback_to_candidates(
+                filter_open_places(
+                    search_replan_candidates(request, analysis.search_keywords),
+                    request.date,
+                ),
+                reason,
+                excluded_place_names=current_course_names,
+                analysis=analysis,
+            )
+            combined_by_name = {candidate.name: candidate for candidate in fresh_candidates}
+            for candidate in filtered:
+                combined_by_name.setdefault(candidate.name, candidate)
+            replanning_candidates = list(combined_by_name.values())
             after_names = {c.name for c in filtered}
             excluded = before_names - after_names
 
             # 리플랜 로그 업데이트
             agent_log = st.session_state.get("agent_log", [])
+            feedback_result = analysis.summary
             if excluded:
-                agent_log.append((
-                    "Feedback & Replan Agent",
-                    f"거절 이유 분석: '{reason[:40]}...' " if len(reason) > 40 else f"거절 이유 분석: '{reason}'",
-                    f"{len(excluded)}개 장소 제외됨: {', '.join(excluded)}",
-                ))
-            else:
-                agent_log.append((
-                    "Feedback & Replan Agent",
-                    f"거절 이유 분석: '{reason[:40]}'" if len(reason) > 40 else f"거절 이유 분석: '{reason}'",
-                    "제외 키워드 없음 — 전체 후보 유지, 코스 재구성",
-                ))
+                feedback_result += f" / 기존 장소 {len(excluded)}개 제외"
+            feedback_result += f" / 새 후보 {len(fresh_candidates)}개 검색"
+            agent_log.append((
+                "Feedback & Replan Agent",
+                f"거절 이유 분석: '{reason[:40]}...' " if len(reason) > 40 else f"거절 이유 분석: '{reason}'",
+                feedback_result,
+            ))
 
             with st.status("리플랜 중...", expanded=True) as status:
                 st.write("**Feedback & Replan Agent** — 거절 이유 반영 중...")
-                if excluded:
-                    st.caption(f"  제외된 장소: {', '.join(excluded)}")
-                else:
-                    st.caption("  제외 키워드를 찾지 못했습니다. 전체 후보로 코스를 재구성합니다.")
+                st.caption(f"  {analysis.summary}")
+                if analysis.search_keywords:
+                    st.caption(f"  새 검색어: {', '.join(analysis.search_keywords)}")
+                st.caption(f"  기존 코스 장소 제외 후 새 후보 {len(fresh_candidates)}개 수집")
 
                 st.write("**Route Planner Agent** — 조건 반영 후 코스 재구성 중...")
                 try:
-                    new_course = build_course(filtered, request)
+                    new_course = build_course(replanning_candidates, request)
                     replan_result = (
                         f"{len(new_course.stops)}개 장소 / "
                         f"이동 {new_course.total_transit_minutes}분"
@@ -508,9 +591,25 @@ def _render_hitl() -> None:
                     st.error("리플랜 중 오류가 발생했습니다.")
                     return
 
+                if new_course.stops:
+                    st.write("**Course Narrator Agent** — 피드백 반영 설명 생성 중...")
+                    context = load_context()
+                    description = generate_course_description(
+                        new_course,
+                        request,
+                        context,
+                        feedback_reason=reason,
+                    )
+                    st.session_state["course_description"] = description
+                    agent_log.append((
+                        "Course Narrator Agent",
+                        "리플랜 피드백 반영 코스 인사이트 생성",
+                        "피드백 반영 설명 생성 완료",
+                    ))
+
             st.session_state["agent_log"] = agent_log
             st.session_state["course"] = new_course
-            st.session_state["candidates"] = filtered
+            st.session_state["candidates"] = replanning_candidates
             st.session_state["replan_count"] = result.replan_count
             st.session_state.pop("show_reject_form", None)
             st.rerun()
@@ -625,20 +724,14 @@ def _render_preference_manager() -> None:
         )
         if st.button("장소 검색", key="search_pref_place"):
             if new_place_query.strip():
-                suggestions, notice = search_place_suggestions(
+                st.session_state["preference_place_suggestions"] = search_place_suggestions(
                     new_place_query.strip()
                 )
-                st.session_state["preference_place_suggestions"] = suggestions
-                st.session_state["preference_place_search_notice"] = notice
                 st.session_state.pop("selected_preference_place", None)
             else:
                 st.warning("검색할 장소명을 입력해 주세요.")
 
         suggestions = st.session_state.get("preference_place_suggestions", [])
-        notice = st.session_state.get("preference_place_search_notice", "")
-        if notice:
-            st.info(notice)
-
         selected_place = st.session_state.get("selected_preference_place")
         if suggestions:
             st.markdown("**검색 결과에서 장소를 선택하세요.**")
@@ -652,8 +745,7 @@ def _render_preference_manager() -> None:
                         st.session_state["selected_preference_place"] = suggestion
                         st.rerun()
                     st.caption(
-                        f"{suggestion['address'] or '주소 정보 없음'} · "
-                        f"{suggestion.get('source', '장소 검색')}"
+                        suggestion["address"] or "주소 정보 없음"
                     )
                     st.divider()
         elif new_place_query:
@@ -676,7 +768,6 @@ def _render_preference_manager() -> None:
                         reason=new_reason.strip(),
                     )
                     st.session_state.pop("preference_place_suggestions", None)
-                    st.session_state.pop("preference_place_search_notice", None)
                     st.session_state.pop("selected_preference_place", None)
                     st.success(f"'{selected_place['name']}' 취향이 추가되었습니다.")
                     st.rerun()
@@ -699,12 +790,12 @@ def _google_maps_search_url(place_name: str, address: str) -> str:
     return f"https://www.google.com/maps/search/?api=1&query={query}"
 
 
-def _select_enum(label: str, label_map: dict, default) -> object:
+def _select_enum(label: str, label_map: dict, default, disabled: bool = False) -> object:
     """Enum 값을 selectbox로 선택한다."""
     options = list(label_map.keys())
     labels = [label_map[o] for o in options]
     default_idx = options.index(default) if default in options else 0
-    selected_label = st.selectbox(label, options=labels, index=default_idx)
+    selected_label = st.selectbox(label, options=labels, index=default_idx, disabled=disabled)
     for enum_val, lbl in label_map.items():
         if lbl == selected_label:
             return enum_val

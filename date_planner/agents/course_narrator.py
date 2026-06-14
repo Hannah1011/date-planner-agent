@@ -36,6 +36,7 @@ def generate_course_description(
     course: DateCourse,
     request: UserRequest,
     preference_context: str = "",
+    feedback_reason: str = "",
 ) -> str:
     """커플의 취향을 분석하고 코스 구성 이유를 자연어로 생성한다.
 
@@ -49,16 +50,17 @@ def generate_course_description(
     Returns:
         코스 설명 문자열.
     """
-    description = _generate_with_gpt(course, request, preference_context)
+    description = _generate_with_gpt(course, request, preference_context, feedback_reason)
     if description:
         return description
-    return _generate_from_template(course, request, preference_context)
+    return _generate_from_template(course, request, preference_context, feedback_reason)
 
 
 def _generate_with_gpt(
     course: DateCourse,
     request: UserRequest,
     preference_context: str,
+    feedback_reason: str,
 ) -> str:
     """GPT-4o-mini로 코스 설명을 생성한다.
 
@@ -87,15 +89,21 @@ def _generate_with_gpt(
 
         prompt = (
             "데이트 코스 추천 인사이트를 완결된 3-4문장으로 작성해주세요.\n"
-            "첫 문장에서는 저장된 취향과 이번 선택 조건을 분석해 두 사람이 무엇을 "
-            "좋아하는 것 같은지 설명하세요.\n"
-            "이어서 '그래서 이번 코스는'이라는 흐름으로 장소 선택 이유와 순서를 설명하세요.\n"
-            "저장된 취향이 없으면 이번 선택 조건만 근거로 분석하고, 없는 취향을 지어내지 마세요.\n\n"
+            "이번 요청에서 사용자가 직접 선택한 내용과 DB에 저장된 과거 취향을 반드시 "
+            "서로 다른 문장으로 구분하세요.\n"
+            "첫 문장에서는 '이번 요청에서는'으로 시작해 먹고 싶은 음식과 선택 무드를 설명하세요.\n"
+            "두 번째 문장에서는 저장 취향이 있으면 '저장된 취향 기록을 보면'으로 시작해 설명하고, "
+            "없으면 저장된 취향이 없다고 말하세요.\n"
+            "이어서 '그래서 이번 코스는'으로 시작해 장소 선택 이유와 순서를 설명하세요.\n"
+            "이번 요청 내용을 저장된 과거 취향이라고 표현하지 말고, 없는 취향을 지어내지 마세요.\n\n"
+            "리플랜 피드백이 있으면 첫 문장에서 피드백을 반영해 다른 장소를 추천한다는 점을 "
+            "명확히 설명하세요.\n\n"
             "장소명과 카테고리에 없는 메뉴, 분위기, 체험 내용을 추측하거나 지어내지 마세요.\n"
             "코스에 음식점이 여러 곳 있더라도 각각에서 모두 식사하라고 권하지 마세요.\n\n"
             f"저장된 취향 정보:\n{preference_context or '없음'}\n\n"
             f"조건: {request.district} / {time_kr} / 무드: {', '.join(moods_kr)}\n"
             f"먹고 싶은 것: {', '.join(request.food_preferences) or '지정 없음'}\n"
+            f"리플랜 피드백: {feedback_reason or '없음'}\n"
             f"코스:\n{stops_text}\n\n"
             f"추천 인사이트:"
         )
@@ -120,6 +128,7 @@ def _generate_from_template(
     course: DateCourse,
     request: UserRequest,
     preference_context: str = "",
+    feedback_reason: str = "",
 ) -> str:
     """템플릿 기반으로 코스 설명을 생성한다.
 
@@ -132,12 +141,27 @@ def _generate_from_template(
         템플릿 기반 설명 문자열.
     """
     moods_kr = [_MOOD_KR.get(m.value, m.value) for m in request.moods]
-    interests = _extract_preference_values(preference_context)
-    interests.extend(moods_kr)
-    interests.extend(request.food_preferences)
-    interest_text = ", ".join(dict.fromkeys(interests)) or "다양한 데이트 경험"
-    basis = "저장된 취향과 이번 선택을 분석해보니" if preference_context else "이번 선택을 분석해보니"
-    parts: list[str] = [f"{basis} 두 분의 취향은 {interest_text} 쪽에 가까워 보여요."]
+    requested_moods = ", ".join(moods_kr)
+    if request.food_preferences:
+        requested_foods = ", ".join(request.food_preferences)
+        request_summary = (
+            f"이번 요청에서 드시고 싶은 음식은 {requested_foods}이고, "
+            f"선택한 무드는 {requested_moods}예요."
+        )
+    else:
+        request_summary = (
+            f"이번 요청에서는 특정 음식을 지정하지 않았고, 선택한 무드는 {requested_moods}예요."
+        )
+    parts: list[str] = []
+    if feedback_reason:
+        parts.append(f"말씀해주신 피드백을 반영해 이전과 다른 장소를 추천드려요.")
+    parts.append(request_summary)
+
+    saved_preferences = _extract_preference_values(preference_context)
+    if saved_preferences:
+        parts.append(f"저장된 취향 기록을 보면 {', '.join(saved_preferences)}도 선호하셨어요.")
+    else:
+        parts.append("아직 저장된 취향 기록은 없어 이번 요청 조건을 중심으로 추천했어요.")
 
     if course.stops:
         route = " → ".join(s.place.name for s in course.stops)

@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from date_planner.tools.naver_search import search_places
+from date_planner.tools import google_places
+from date_planner.tools.naver_search import search_place_suggestions, search_places
 from date_planner.tools.google_places import (
     get_place_details,
     is_place_open_now,
-    search_place_suggestions,
 )
 from date_planner.tools.weather import get_weather
 from date_planner.tools.directions import get_transit_duration
@@ -75,6 +75,12 @@ class TestNaverSearch:
             result = search_places("파스타")
         assert "<b>" not in result[0]["name"]
 
+    def test_decodes_html_entities_from_name(self):
+        data = {"items": [{"title": "홀 &amp; 갤러리", "roadAddress": "서울 서초구"}]}
+        with mock.patch("requests.get", return_value=_make_response(data)):
+            result = search_places("갤러리")
+        assert result[0]["name"] == "홀 & 갤러리"
+
     def test_returns_empty_list_on_api_error(self):
         with mock.patch("requests.get", side_effect=requests.RequestException("timeout")):
             result = search_places("마포구 파스타")
@@ -85,6 +91,16 @@ class TestNaverSearch:
         monkeypatch.delenv("NAVER_CLIENT_SECRET", raising=False)
         result = search_places("마포구 파스타")
         assert result == []
+
+    def test_place_suggestions_prioritize_keyword_matches(self):
+        results = [
+            {"name": "관련성 낮은 장소", "address": "서울 중구"},
+            {"name": "약수역", "address": "서울 중구"},
+        ]
+        with mock.patch("date_planner.tools.naver_search.search_places", return_value=results):
+            suggestions = search_place_suggestions("약수")
+        assert suggestions[0]["name"] == "약수역"
+        assert suggestions[0]["address"] == "서울 중구"
 
 
 # --- Google Places ---
@@ -104,26 +120,11 @@ _PLACE_DETAILS_JSON = {
     }
 }
 _OPEN_NOW_JSON = {"result": {"opening_hours": {"open_now": True}}}
-_TEXT_SEARCH_JSON = {
-    "results": [
-        {
-            "name": "연남동 파스타집",
-            "formatted_address": "서울 마포구 연남동 123-4",
-            "place_id": "ChIJmock001",
-        },
-        {
-            "name": "연남 파스타",
-            "formatted_address": "서울 마포구 연남동 55-6",
-            "place_id": "ChIJmock002",
-        },
-    ]
-}
-
-
 class TestGooglePlaces:
     @pytest.fixture(autouse=True)
     def set_env(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test_key")
+        google_places._DENIED_API_KEYS.clear()
 
     def test_get_details_returns_dict(self):
         with mock.patch("requests.get", side_effect=[
@@ -177,29 +178,16 @@ class TestGooglePlaces:
             result = is_place_open_now("ChIJmock001")
         assert result is True
 
-    def test_search_place_suggestions_returns_name_and_address(self):
-        with mock.patch("requests.get", return_value=_make_response(_TEXT_SEARCH_JSON)):
-            result, notice = search_place_suggestions("연남동 파스타")
-        assert result[0]["name"] == "연남동 파스타집"
-        assert result[0]["address"] == "서울 마포구 연남동 123-4"
-        assert notice == ""
-
-    def test_search_place_suggestions_falls_back_to_naver_on_google_denied(self):
-        denied = {"status": "REQUEST_DENIED", "error_message": "not authorized", "results": []}
-        naver_result = [
-            {"name": "관련성 낮은 장소", "address": "서울 중구", "category": "기타"},
-            {"name": "약수역", "address": "서울 중구", "category": "지하철역"},
-        ]
-        with mock.patch("requests.get", return_value=_make_response(denied)):
-            with mock.patch(
-                "date_planner.tools.google_places.search_places",
-                return_value=naver_result,
-            ):
-                result, notice = search_place_suggestions("약수")
-        assert result[0]["name"] == "약수역"
-        assert result[0]["source"] == "Naver Local Search"
-        assert "권한 오류" in notice
-
+    def test_request_denied_stops_follow_up_searches(self):
+        denied = {
+            "status": "REQUEST_DENIED",
+            "error_message": "This API project is not authorized.",
+            "candidates": [],
+        }
+        with mock.patch("requests.get", return_value=_make_response(denied)) as mock_get:
+            assert get_place_details("장소 A", "서울") == {}
+            assert get_place_details("장소 B", "서울") == {}
+        assert mock_get.call_count == 1
 
 # --- 날씨 ---
 

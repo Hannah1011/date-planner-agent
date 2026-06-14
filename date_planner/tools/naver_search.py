@@ -1,5 +1,6 @@
 """네이버 검색 API 래퍼 (1차 장소 목록 수집)."""
 
+from html import unescape
 import os
 
 import requests
@@ -47,7 +48,7 @@ def search_places(query: str, display: int = 5) -> list[dict]:
             except (ValueError, TypeError):
                 lat, lon = 0.0, 0.0
             results.append({
-                "name": item.get("title", "").replace("<b>", "").replace("</b>", ""),
+                "name": unescape(item.get("title", "").replace("<b>", "").replace("</b>", "")),
                 "address": item.get("roadAddress") or item.get("address", ""),
                 "category": item.get("category", ""),
                 "link": item.get("link", ""),
@@ -58,3 +59,34 @@ def search_places(query: str, display: int = 5) -> list[dict]:
     except requests.RequestException as e:
         logger.error("네이버 검색 API 호출 실패: %s", e)
         return []
+
+
+def search_place_suggestions(query: str, limit: int = 20) -> list[dict]:
+    """장소명 일부나 지역 키워드로 관련성 높은 장소 추천을 반환한다."""
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return []
+
+    queries = [cleaned_query]
+    if " " not in cleaned_query and not cleaned_query.endswith("역"):
+        queries.append(f"{cleaned_query}역")
+
+    by_name: dict[str, dict] = {}
+    for search_query in queries:
+        for item in search_places(search_query, display=5):
+            name = item.get("name", "")
+            if name and name not in by_name:
+                by_name[name] = {
+                    "name": name,
+                    "address": item.get("address", ""),
+                }
+
+    suggestions = list(by_name.values())
+    suggestions.sort(
+        key=lambda item: (
+            cleaned_query not in item["name"],
+            cleaned_query not in item["address"],
+            item["name"],
+        )
+    )
+    return suggestions[:limit]
