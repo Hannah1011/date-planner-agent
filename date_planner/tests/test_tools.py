@@ -10,7 +10,11 @@ import pytest
 import requests
 
 from date_planner.tools.naver_search import search_places
-from date_planner.tools.google_places import get_place_details, is_place_open_now
+from date_planner.tools.google_places import (
+    get_place_details,
+    is_place_open_now,
+    search_place_suggestions,
+)
 from date_planner.tools.weather import get_weather
 from date_planner.tools.directions import get_transit_duration
 from date_planner.tools.crawler import get_break_time_info
@@ -100,6 +104,20 @@ _PLACE_DETAILS_JSON = {
     }
 }
 _OPEN_NOW_JSON = {"result": {"opening_hours": {"open_now": True}}}
+_TEXT_SEARCH_JSON = {
+    "results": [
+        {
+            "name": "연남동 파스타집",
+            "formatted_address": "서울 마포구 연남동 123-4",
+            "place_id": "ChIJmock001",
+        },
+        {
+            "name": "연남 파스타",
+            "formatted_address": "서울 마포구 연남동 55-6",
+            "place_id": "ChIJmock002",
+        },
+    ]
+}
 
 
 class TestGooglePlaces:
@@ -121,16 +139,19 @@ class TestGooglePlaces:
             _make_response(_PLACE_DETAILS_JSON),
         ]):
             result = get_place_details("연남동 파스타집", "서울 마포구 연남동")
-        for key in ("place_id", "rating", "price_level", "opening_hours", "reviews"):
+        for key in ("place_id", "opening_hours", "lat", "lon"):
             assert key in result
 
-    def test_rating_is_float(self):
+    def test_does_not_request_rating_or_price_level(self):
         with mock.patch("requests.get", side_effect=[
             _make_response(_FIND_PLACE_JSON),
             _make_response(_PLACE_DETAILS_JSON),
-        ]):
-            result = get_place_details("카페", "서울 마포구")
-        assert isinstance(result["rating"], float)
+        ]) as mock_get:
+            get_place_details("카페", "서울 마포구")
+        fields = mock_get.call_args_list[1].kwargs["params"]["fields"]
+        assert "rating" not in fields
+        assert "price_level" not in fields
+        assert "reviews" not in fields
 
     def test_is_open_returns_bool(self):
         with mock.patch("requests.get", return_value=_make_response(_OPEN_NOW_JSON)):
@@ -155,6 +176,26 @@ class TestGooglePlaces:
         with mock.patch("requests.get", side_effect=requests.RequestException("error")):
             result = is_place_open_now("ChIJmock001")
         assert result is True
+
+    def test_search_place_suggestions_returns_name_and_address(self):
+        with mock.patch("requests.get", return_value=_make_response(_TEXT_SEARCH_JSON)):
+            result, notice = search_place_suggestions("연남동 파스타")
+        assert result[0]["name"] == "연남동 파스타집"
+        assert result[0]["address"] == "서울 마포구 연남동 123-4"
+        assert notice == ""
+
+    def test_search_place_suggestions_falls_back_to_naver_on_google_denied(self):
+        denied = {"status": "REQUEST_DENIED", "error_message": "not authorized", "results": []}
+        naver_result = [{"name": "약수역", "address": "서울 중구", "category": "지하철역"}]
+        with mock.patch("requests.get", return_value=_make_response(denied)):
+            with mock.patch(
+                "date_planner.tools.google_places.search_places",
+                return_value=naver_result,
+            ):
+                result, notice = search_place_suggestions("약수")
+        assert result[0]["name"] == "약수역"
+        assert result[0]["source"] == "Naver Local Search"
+        assert "권한 오류" in notice
 
 
 # --- 날씨 ---

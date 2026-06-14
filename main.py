@@ -14,7 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from date_planner.agents.feedback_replan import apply_feedback_to_candidates, process_feedback
-from date_planner.agents.input_collector import build_search_query, parse_user_request
+from date_planner.agents.course_narrator import generate_course_description
+from date_planner.utils.input_parser import build_search_query, parse_user_request
 from date_planner.agents.memory_agent import load_context
 from date_planner.agents.route_planner import build_course, is_within_budget
 from date_planner.agents.search_agent import filter_open_places, search_candidates
@@ -28,11 +29,10 @@ logger = get_logger(__name__)
 _SAMPLE_INPUT = {
     "district": "마포구",
     "date": (date.today() + timedelta(days=1)).isoformat(),
-    "time_slot": TimeSlot.AFTERNOON.value,
-    "mood": Mood.FOOD_EXPLORATION.value,
-    "food_preferences": ["파스타", "카페"],
+    "time_slots": [TimeSlot.AFTERNOON.value],
+    "moods": [Mood.FOOD_EXPLORATION.value],
+    "food_preferences": ["파스타"],
     "cafe_style": CafeStyle.COZY.value,
-    "budget": 60000,
     "activities": [],
 }
 
@@ -40,17 +40,19 @@ _SAMPLE_INPUT = {
 def run(raw_input: dict) -> None:
     """데이트 코스 생성 파이프라인을 실행한다.
 
-    Input Collector -> Memory -> Search -> Route Planner -> Feedback 순서로
-    Agent를 순차 호출하며, 사용자 입력이 없는 CLI 모드에서는 자동 승인한다.
+    Input Parser -> Memory -> Search -> Route Planner -> Course Narrator -> Feedback
+    순서로 실행하며, 사용자 입력이 없는 CLI 모드에서는 자동 승인한다.
 
     Args:
         raw_input: 사용자 조건 dict.
     """
     # Step 1: 입력 검증 및 구조화
-    _step(1, "Input Collector Agent", "사용자 입력 파싱 및 유효성 검증")
+    _step(1, "Input Parser", "사용자 입력 파싱 및 유효성 검증")
     try:
         request = parse_user_request(raw_input)
-        _step_ok(f"{request.district} / {request.date} / {request.time_slot.value} / {request.mood.value}")
+        time_slots_str = ", ".join(ts.value for ts in request.time_slots)
+        moods_str = ", ".join(m.value for m in request.moods)
+        _step_ok(f"{request.district} / {request.date} / [{time_slots_str}] / [{moods_str}]")
     except ValueError as e:
         logger.error("입력 오류: %s", e)
         sys.exit(1)
@@ -91,8 +93,12 @@ def run(raw_input: dict) -> None:
         _step_ok(f"{len(course.stops)}개 장소, 이동 {course.total_transit_minutes}분, 예상 {course.total_estimated_cost:,}원")
         _print_course(course, replan_count)
 
+        _step(5 + replan_count, "Course Narrator Agent", "저장 취향 기반 코스 인사이트 생성")
+        description = generate_course_description(course, request, preference_context)
+        _step_ok(description)
+
         # CLI 모드: 자동 승인 (UI 없음)
-        _step(5 + replan_count, "Feedback & Replan Agent", "CLI 모드 — 자동 승인 처리")
+        _step(6 + replan_count, "Feedback & Replan Agent", "CLI 모드 — 자동 승인 처리")
         result = process_feedback(course, True, "", replan_count, request)
         if result.accepted:
             _step_ok("Memory Agent에 방문 기록 및 취향 태그 저장 완료")

@@ -72,7 +72,7 @@ def init_db(db_path: Path = _DEFAULT_DB_PATH) -> bool:
                     created_at     TEXT    NOT NULL
                 );
             """)
-        logger.info("DB 초기화 완료: %s", db_path)
+        logger.debug("DB 준비 완료: %s", db_path)
         return True
     except (sqlite3.OperationalError, sqlite3.DatabaseError, OSError) as e:
         logger.error("DB 초기화 실패: %s", e)
@@ -290,6 +290,101 @@ def get_preference_summary(db_path: Path = _DEFAULT_DB_PATH) -> str:
             lines.append(f"  * {p['category']}: {p['value']}{reason_part}")
 
     return "\n".join(lines)
+
+
+def load_preferences_with_id(
+    limit: int = 200,
+    db_path: Path = _DEFAULT_DB_PATH,
+) -> list[dict]:
+    """id를 포함한 취향 데이터를 로드한다 (취향 관리 UI용).
+
+    Args:
+        limit: 로드할 최대 건수.
+        db_path: SQLite DB 파일 경로.
+
+    Returns:
+        id 포함 취향 dict 리스트. 에러 시 빈 리스트.
+    """
+    try:
+        with _get_connection(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, category, value, sentiment, reason, created_at
+                FROM user_preferences
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+        logger.error("취향 로드 실패: %s", e)
+        return []
+
+
+def delete_preference(
+    pref_id: int,
+    db_path: Path = _DEFAULT_DB_PATH,
+) -> bool:
+    """특정 취향 데이터를 삭제한다.
+
+    Args:
+        pref_id: 삭제할 취향의 id.
+        db_path: SQLite DB 파일 경로.
+
+    Returns:
+        해당 취향이 실제로 삭제되었는지 여부.
+    """
+    try:
+        with _get_connection(db_path) as conn:
+            cursor = conn.execute("DELETE FROM user_preferences WHERE id = ?", (pref_id,))
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.debug("취향 삭제 및 DB 반영 완료: id=%d", pref_id)
+        else:
+            logger.warning("삭제할 취향을 찾지 못함: id=%d", pref_id)
+        return deleted
+    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+        logger.error("취향 삭제 실패: %s", e)
+        return False
+
+
+def update_preference(
+    pref_id: int,
+    category: str,
+    value: str,
+    sentiment: str,
+    reason: str = "",
+    db_path: Path = _DEFAULT_DB_PATH,
+) -> bool:
+    """특정 취향 데이터를 수정한다.
+
+    Args:
+        pref_id: 수정할 취향의 id.
+        category: 수정할 카테고리.
+        value: 수정할 값 (장소명 또는 항목명).
+        sentiment: "positive" 또는 "negative".
+        reason: 수정할 이유.
+        db_path: SQLite DB 파일 경로.
+
+    Returns:
+        수정 성공 여부.
+    """
+    try:
+        with _get_connection(db_path) as conn:
+            conn.execute(
+                """
+                UPDATE user_preferences
+                SET category = ?, value = ?, sentiment = ?, reason = ?
+                WHERE id = ?
+                """,
+                (category, value, sentiment, reason, pref_id),
+            )
+        logger.debug("취향 수정 완료: id=%d value=%s", pref_id, value)
+        return True
+    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+        logger.error("취향 수정 실패: %s", e)
+        return False
 
 
 def _now() -> str:

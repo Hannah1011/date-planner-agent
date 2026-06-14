@@ -52,16 +52,14 @@ else
     echo "    >>> .env 파일에 API 키를 입력해 주세요 (run.sh --help 참고) <<<"
 fi
 
-# 5. DB 초기화 및 시드 데이터 삽입
+# 5. 빈 DB 준비
 echo ""
-echo "[5/5] DB 초기화 및 시드 데이터 삽입..."
+echo "[5/5] 빈 DB 준비..."
 "$VENV_DIR/bin/python" -c "
 from date_planner.memory.preference_store import init_db
-from date_planner.data.seed_data import insert_seed_data
 init_db()
-insert_seed_data()
 "
-echo "    DB 초기화 및 샘플 취향 데이터 삽입 완료"
+echo "    빈 DB 준비 완료"
 
 echo ""
 echo "=== 설정 완료! ==="

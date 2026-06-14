@@ -75,7 +75,7 @@ def get_weather(district: str, date: str) -> dict:
                 "appid": api_key,
                 "units": "metric",
                 "lang": "kr",
-                "cnt": 8,
+                "cnt": 40,  # 3시간 단위 40개 = 최대 5일치 예보
             },
             timeout=5,
         )

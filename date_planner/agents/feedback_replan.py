@@ -1,6 +1,6 @@
 """Feedback & Replan Agent: HITL 체크포인트, 리플랜 루프, Reflection.
 
-Goal Setting & Monitoring + HITL + Reflection 패턴. GPT-4o 사용.
+Goal Setting & Monitoring + HITL + 부분적 Reflection 패턴.
 """
 
 from dataclasses import dataclass
@@ -50,7 +50,7 @@ def process_feedback(
         FeedbackResult 인스턴스.
     """
     if accepted:
-        _handle_accepted(course)
+        _handle_accepted(course, reason)
         return FeedbackResult(
             accepted=True,
             reason="",
@@ -122,10 +122,10 @@ def apply_feedback_to_candidates(
     return filtered
 
 
-def _handle_accepted(course: DateCourse) -> None:
+def _handle_accepted(course: DateCourse, reason: str = "") -> None:
     """승인된 코스를 Memory Agent에 저장한다."""
     try:
-        save_accepted_course(course)
+        save_accepted_course(course, reason=reason)
         logger.info("승인 코스 저장 완료: session=%s", course.session_id)
     except Exception as e:
         logger.error("승인 코스 저장 중 오류: %s", e)
@@ -164,11 +164,10 @@ def build_replan_context(reason: str, original_request: UserRequest) -> dict:
     context = {
         "district": original_request.district,
         "date": original_request.date,
-        "time_slot": original_request.time_slot,
-        "mood": original_request.mood,
+        "time_slots": original_request.time_slots,
+        "moods": original_request.moods,
         "food_preferences": original_request.food_preferences,
         "cafe_style": original_request.cafe_style,
-        "budget": original_request.budget,
         "activities": original_request.activities,
         "exclude_reason": reason,
     }

@@ -6,11 +6,77 @@ import requests
 
 from date_planner.utils.logger import get_logger
 from date_planner.utils.text_utils import strip_floor_info
+from date_planner.tools.naver_search import search_places
 
 logger = get_logger(__name__)
 
 _FIND_PLACE_URL = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
 _DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
+_TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+
+
+def search_place_suggestions(query: str, limit: int = 20) -> tuple[list[dict], str]:
+    """키워드에 맞는 장소 추천과 검색 안내 메시지를 반환한다.
+
+    Google Places를 먼저 사용하고, 권한 오류나 결과 없음이면 Naver Local Search로
+    폴백한다.
+    """
+    api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return [], ""
+
+    if api_key:
+        try:
+            response = requests.get(
+                _TEXT_SEARCH_URL,
+                params={
+                    "query": f"{cleaned_query} 서울",
+                    "key": api_key,
+                    "language": "ko",
+                    "region": "kr",
+                },
+                timeout=5,
+            )
+            response.raise_for_status()
+            data = response.json()
+            status = data.get("status", "")
+            results = data.get("results", [])
+            suggestions = [
+                {
+                    "name": item.get("name", ""),
+                    "address": item.get("formatted_address", ""),
+                    "place_id": item.get("place_id", ""),
+                    "source": "Google Places",
+                }
+                for item in results[:limit]
+                if item.get("name")
+            ]
+            if suggestions:
+                return suggestions, ""
+            if status not in ("OK", "ZERO_RESULTS"):
+                logger.warning("Google Places 장소 검색 상태: %s", status)
+                google_notice = "Google Places 권한 오류로 Naver 장소 검색 결과를 표시합니다."
+            else:
+                google_notice = "Google Places 결과가 없어 Naver 장소 검색 결과를 표시합니다."
+        except requests.RequestException as e:
+            logger.error("Google Places 유사 장소 검색 실패: %s", e)
+            google_notice = "Google Places 연결 실패로 Naver 장소 검색 결과를 표시합니다."
+    else:
+        google_notice = "Google Places API 키가 없어 Naver 장소 검색 결과를 표시합니다."
+
+    naver_results = search_places(cleaned_query, display=min(limit, 5))
+    suggestions = [
+        {
+            "name": item.get("name", ""),
+            "address": item.get("address", ""),
+            "place_id": "",
+            "source": "Naver Local Search",
+        }
+        for item in naver_results
+        if item.get("name")
+    ]
+    return suggestions, google_notice
 
 
 def get_place_details(place_name: str, address: str) -> dict:
@@ -21,8 +87,7 @@ def get_place_details(place_name: str, address: str) -> dict:
         address: 장소 주소.
 
     Returns:
-        place_id, rating, price_level, opening_hours, reviews 를 포함한 dict.
-        에러 시 빈 dict.
+        place_id, opening_hours, 좌표를 포함한 dict. 에러 시 빈 dict.
     """
     api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
     if not api_key:
@@ -32,14 +97,14 @@ def get_place_details(place_name: str, address: str) -> dict:
     try:
         place_id = _find_place_id(place_name, address, api_key)
         if not place_id:
-            logger.debug("Place ID 없음: %s — 별점/가격 정보 조회 건너뜀", place_name)
+            logger.debug("Place ID 없음: %s — 장소 상세 조회 건너뜀", place_name)
             return {}
 
         response = requests.get(
             _DETAILS_URL,
             params={
                 "place_id": place_id,
-                "fields": "place_id,rating,price_level,opening_hours,reviews,geometry",
+                "fields": "place_id,opening_hours,geometry",
                 "key": api_key,
                 "language": "ko",
             },
@@ -50,10 +115,7 @@ def get_place_details(place_name: str, address: str) -> dict:
         location = result.get("geometry", {}).get("location", {})
         return {
             "place_id": result.get("place_id", ""),
-            "rating": result.get("rating", 0.0),
-            "price_level": result.get("price_level", 0),
             "opening_hours": result.get("opening_hours", {}),
-            "reviews": result.get("reviews", []),
             "lat": location.get("lat", 0.0),
             "lon": location.get("lng", 0.0),
         }
@@ -138,15 +200,21 @@ def _search_place(query: str, api_key: str) -> str:
                 "fields": "place_id",
                 "key": api_key,
                 "language": "ko",
+                "locationbias": "circle:20000@37.5665,126.9780",
             },
             timeout=5,
         )
         response.raise_for_status()
-        candidates = response.json().get("candidates", [])
-        if not candidates:
-            logger.debug("Place 검색 결과 없음: %s", query)
-            return ""
-        return candidates[0].get("place_id", "")
+        data = response.json()
+        status = data.get("status", "")
+        candidates = data.get("candidates", [])
+        if candidates:
+            return candidates[0].get("place_id", "")
+        if status and status not in ("OK", "ZERO_RESULTS"):
+            logger.warning("Place 검색 API 오류: query=%s status=%s", query, status)
+        else:
+            logger.debug("Place 검색 결과 없음: query=%s status=%s", query, status)
+        return ""
     except requests.RequestException as e:
         logger.error("Place ID 검색 실패: %s", e)
         return ""

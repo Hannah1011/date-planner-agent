@@ -66,6 +66,7 @@ class TestModelConfig:
     def test_all_agents_have_model(self):
         required_agents = {"input_collector", "search", "route_planner", "memory", "feedback_replan"}
         assert required_agents.issubset(MODEL_CONFIG.keys())
+        assert MODEL_CONFIG["course_narrator"] == "gpt-4o-mini"
 
     def test_lightweight_model_for_input_collector(self):
         assert MODEL_CONFIG["input_collector"] == "gpt-4o-mini"

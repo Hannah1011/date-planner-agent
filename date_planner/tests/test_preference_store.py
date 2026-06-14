@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from date_planner.memory.preference_store import (
+    delete_preference,
     init_db,
     save_feedback,
     save_preference,
@@ -13,6 +14,7 @@ from date_planner.memory.preference_store import (
     load_preferences,
     load_visit_history,
     get_preference_summary,
+    load_preferences_with_id,
 )
 
 
@@ -83,6 +85,14 @@ class TestSaveAndLoadPreference:
         bad_db = tmp_path / "missing.db"  # init_db 안 함 → 테이블 없음
         rows = load_preferences(db_path=bad_db)
         assert rows == []
+
+    def test_delete_returns_true_only_when_row_is_deleted(self, tmp_db):
+        save_preference("음식", "파스타", "positive", "", tmp_db)
+        pref_id = load_preferences_with_id(db_path=tmp_db)[0]["id"]
+
+        assert delete_preference(pref_id, tmp_db) is True
+        assert delete_preference(pref_id, tmp_db) is False
+        assert load_preferences(db_path=tmp_db) == []
 
 
 class TestSaveAndLoadVisit:

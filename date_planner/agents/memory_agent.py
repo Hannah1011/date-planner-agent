@@ -1,6 +1,6 @@
 """Memory Agent: 취향/피드백 저장 및 LLM 프롬프트 맥락 주입.
 
-Memory Management 패턴. text-embedding-3-small 사용 (LLM 호출 최소화).
+SQLite 기반 Memory Management 패턴.
 """
 
 from pathlib import Path
@@ -44,14 +44,20 @@ def load_context(db_path: Optional[Path] = None) -> str:
         return ""
 
 
-def save_accepted_course(course: DateCourse, db_path: Optional[Path] = None) -> None:
+def save_accepted_course(
+    course: DateCourse,
+    reason: str = "",
+    db_path: Optional[Path] = None,
+) -> None:
     """승인된 코스의 방문지 및 긍정 취향 태그를 DB에 저장한다.
 
     Args:
         course: 사용자가 승인한 DateCourse.
+        reason: 승인 이유 (사용자가 입력한 텍스트). 없으면 "코스 승인".
         db_path: SQLite DB 파일 경로. None이면 기본 경로 사용.
     """
     kwargs = {"db_path": db_path} if db_path else {}
+    preference_reason = reason.strip() if reason and reason.strip() else "코스 승인"
     for stop in course.stops:
         place = stop.place
         try:
@@ -61,14 +67,14 @@ def save_accepted_course(course: DateCourse, db_path: Optional[Path] = None) -> 
                 district=place.district,
                 rating=5,
                 visited_at=_extract_date(course),
-                notes="코스 승인",
+                notes=preference_reason,
                 **kwargs,
             )
             save_preference(
                 category=_infer_category(place.category),
                 value=place.name,
                 sentiment=Sentiment.POSITIVE.value,
-                reason="코스 승인",
+                reason=preference_reason,
                 **kwargs,
             )
         except Exception as e:

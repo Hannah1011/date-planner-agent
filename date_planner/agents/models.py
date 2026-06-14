@@ -12,11 +12,10 @@ class UserRequest:
 
     district: str
     date: str
-    time_slot: TimeSlot
-    mood: Mood
+    time_slots: list[TimeSlot]  # 복수 선택 가능 (시간대)
+    moods: list[Mood]           # 복수 선택 가능 (무드)
     food_preferences: list[str]
     cafe_style: CafeStyle
-    budget: int
     activities: list[str] = field(default_factory=list)
 
 
@@ -35,6 +34,8 @@ class PlaceCandidate:
     reviews: list[dict] = field(default_factory=list)
     lat: float = 0.0
     lon: float = 0.0
+    category_type: str = ""    # "food" | "cafe" | "activity"
+    mood_tags: list[str] = field(default_factory=list)
 
 
 @dataclass
