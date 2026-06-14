@@ -203,9 +203,11 @@ class TestWeather:
             result = get_weather("마포구", "2030-06-15")
         assert result == {}
 
-    def test_returns_empty_for_unknown_district(self):
-        result = get_weather("없는구", "2030-06-15")
-        assert result == {}
+    def test_unknown_district_falls_back_to_seoul(self):
+        with mock.patch("requests.get", return_value=_make_response(_WEATHER_JSON)):
+            result = get_weather("없는구", "2030-06-15")
+        assert isinstance(result, dict)
+        assert "condition" in result
 
     def test_returns_empty_when_no_api_key(self, monkeypatch):
         monkeypatch.delenv("OPENWEATHERMAP_API_KEY", raising=False)
