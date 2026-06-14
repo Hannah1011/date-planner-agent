@@ -56,7 +56,10 @@ def search_place_suggestions(query: str, limit: int = 20) -> tuple[list[dict], s
                 return suggestions, ""
             if status not in ("OK", "ZERO_RESULTS"):
                 logger.warning("Google Places 장소 검색 상태: %s", status)
-                google_notice = "Google Places 권한 오류로 Naver 장소 검색 결과를 표시합니다."
+                google_notice = (
+                    "Google Places 권한 오류로 Naver 장소 검색 결과를 표시합니다. "
+                    "Google Cloud에서 Places API 활성화와 API 키 제한을 확인해 주세요."
+                )
             else:
                 google_notice = "Google Places 결과가 없어 Naver 장소 검색 결과를 표시합니다."
         except requests.RequestException as e:
@@ -65,18 +68,37 @@ def search_place_suggestions(query: str, limit: int = 20) -> tuple[list[dict], s
     else:
         google_notice = "Google Places API 키가 없어 Naver 장소 검색 결과를 표시합니다."
 
-    naver_results = search_places(cleaned_query, display=min(limit, 5))
-    suggestions = [
-        {
-            "name": item.get("name", ""),
-            "address": item.get("address", ""),
-            "place_id": "",
-            "source": "Naver Local Search",
-        }
-        for item in naver_results
-        if item.get("name")
-    ]
+    suggestions = _search_naver_suggestions(cleaned_query, limit)
     return suggestions, google_notice
+
+
+def _search_naver_suggestions(query: str, limit: int) -> list[dict]:
+    """지역 키워드 검색을 보강하고 입력어 관련성이 높은 Naver 결과를 반환한다."""
+    queries = [query]
+    if " " not in query and not query.endswith("역"):
+        queries.append(f"{query}역")
+
+    by_name: dict[str, dict] = {}
+    for search_query in queries:
+        for item in search_places(search_query, display=5):
+            name = item.get("name", "")
+            if name and name not in by_name:
+                by_name[name] = {
+                    "name": name,
+                    "address": item.get("address", ""),
+                    "place_id": "",
+                    "source": "Naver Local Search",
+                }
+
+    suggestions = list(by_name.values())
+    suggestions.sort(
+        key=lambda item: (
+            query not in item["name"],
+            query not in item["address"],
+            item["name"],
+        )
+    )
+    return suggestions[:limit]
 
 
 def get_place_details(place_name: str, address: str) -> dict:

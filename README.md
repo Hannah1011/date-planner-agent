@@ -170,13 +170,14 @@ Google Places는 장소 좌표·영업 정보와 취향 추가 장소 검색에 
 2. 새 프로젝트를 생성하거나 기존 프로젝트를 선택합니다.
 3. 프로젝트에 결제 계정을 연결합니다.
 4. `API 및 서비스 → 라이브러리`에서 다음 API를 활성화합니다.
-   - Places API
+   - Places API (`maps/api/place/...` 엔드포인트 사용 권한 포함)
    - Directions API
 5. `API 및 서비스 → 사용자 인증 정보`에서 API 키를 생성합니다.
 6. API 키 제한 설정에서 사용할 API와 환경을 제한하는 것을 권장합니다.
 7. 생성한 키를 `GOOGLE_PLACES_API_KEY`, `GOOGLE_DIRECTIONS_API_KEY`에 입력합니다.
 
 같은 Google API 키를 두 환경 변수에 입력해도 되지만, 운영 환경에서는 API별로 키를 분리하고 제한하는 편이 안전합니다.
+장소 검색 화면에 Google Places 권한 오류가 표시되면 활성화된 API 목록과 API 키의 `API 제한사항`에 Places API가 허용되어 있는지 확인하세요.
 
 ### OpenWeatherMap API 키
 
@@ -248,22 +249,3 @@ bash run.sh --ui
 | **Guardrails** | 지역·날짜 입력 검증, 최대 코스 장소 수, 장소 간 이동 시간 기준, 음식점·카페 최대 개수, 최대 리플랜 횟수를 제한합니다. |
 | **Exception Handling** | 외부 API와 DB 작업 실패를 `try-except`로 처리하고 빈 결과나 기본값으로 폴백하여 앱 전체가 중단되지 않도록 합니다. |
 | **Resource-Aware Optimization** | 장소 검색은 병렬 처리하고, 실제 LLM 호출은 자연어 인사이트가 필요한 Course Narrator에만 사용합니다. Narrator 출력이 잘리거나 호출에 실패하면 템플릿으로 폴백합니다. |
-
-### 부분 적용된 패턴
-
-| 패턴 | 현재 적용 범위와 한계 |
-|---|---|
-| **Reflection** | 사용자의 거절 이유에서 비선호 키워드를 추출해 후보를 제외하고 코스를 다시 구성합니다. 다만 에이전트가 자신의 결과를 스스로 평가하거나 LLM으로 원인을 깊게 분석하는 형태의 완전한 self-reflection은 아닙니다. |
-| **Learning and Adaptation** | 승인 코스와 직접 등록한 취향을 저장하고 이후 Course Narrator의 취향 분석에 반영합니다. 현재 Search Agent와 Route Planner의 장소 선택 자체가 저장 취향에 따라 자동 변화하지는 않습니다. |
-| **Goal Setting & Monitoring** | 선택 무드별 최소 한 곳 포함, 이동 시간 제한, 리플랜 최대 3회 등의 목표와 진행 상태를 로그로 확인합니다. 동적으로 목표를 생성하거나 우선순위를 재설정하는 별도 Goal Manager는 없습니다. |
-| **Evaluation & Monitoring** | 사용자 승인·거절을 평가 신호로 저장하고 에이전트 실행 로그, 무드 반영 수, 리플랜 횟수를 표시합니다. 자동 품질 점수, 회귀 평가 대시보드, 운영 지표 모니터링은 구현되어 있지 않습니다. |
-
-### 현재 적용되지 않은 패턴
-
-| 패턴 | 미적용 이유 |
-|---|---|
-| **RAG** | 저장 취향을 프롬프트에 넣지만, 문서 임베딩이나 벡터 검색을 사용하는 Retrieval-Augmented Generation 구조는 아닙니다. 현재는 SQLite 기반 구조화 메모리 조회입니다. |
-| **MCP** | Model Context Protocol 서버나 MCP 도구를 연결하지 않고 Python API 래퍼를 직접 호출합니다. |
-| **A2A** | 에이전트 간 메시지 프로토콜이나 독립 서비스 통신 없이 동일 Python 프로세스에서 함수 호출로 연결합니다. |
-
-따라서 이 프로젝트를 설명할 때는 `Prompt Chaining`, `Routing`, `Parallelization`, `Tool Use`, `Planning`, `Multi-Agent System`, `Memory Management`, `HITL`, `Guardrails`, `Exception Handling`, `Resource-Aware Optimization`을 주요 적용 패턴으로 소개하는 것이 가장 정확합니다.

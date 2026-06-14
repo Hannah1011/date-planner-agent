@@ -186,7 +186,10 @@ class TestGooglePlaces:
 
     def test_search_place_suggestions_falls_back_to_naver_on_google_denied(self):
         denied = {"status": "REQUEST_DENIED", "error_message": "not authorized", "results": []}
-        naver_result = [{"name": "약수역", "address": "서울 중구", "category": "지하철역"}]
+        naver_result = [
+            {"name": "관련성 낮은 장소", "address": "서울 중구", "category": "기타"},
+            {"name": "약수역", "address": "서울 중구", "category": "지하철역"},
+        ]
         with mock.patch("requests.get", return_value=_make_response(denied)):
             with mock.patch(
                 "date_planner.tools.google_places.search_places",
