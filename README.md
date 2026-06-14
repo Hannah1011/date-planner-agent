@@ -4,6 +4,10 @@
 
 선택한 무드마다 관련 장소를 최소 한 곳씩 코스에 포함하도록 검색하고, 이동 시간과 날씨를 반영합니다. 승인한 코스는 취향 DB에 저장되며 다음 추천의 Course Narrator 인사이트에 활용됩니다.
 
+<img width="960" height="780" alt="Screen Recording 2026-06-14 at 7 07 59 PM" src="https://github.com/user-attachments/assets/632761b6-e396-4164-a169-d18ef3912d68" />
+
+
+
 ## 주요 기능
 
 - 서울 25개 구 지도 선택
