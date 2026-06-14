@@ -47,29 +47,40 @@ def run(raw_input: dict) -> None:
         raw_input: 사용자 조건 dict.
     """
     # Step 1: 입력 검증 및 구조화
+    _step(1, "Input Collector Agent", "사용자 입력 파싱 및 유효성 검증")
     try:
         request = parse_user_request(raw_input)
-        logger.info("요청 파싱 완료: %s %s %s", request.district, request.date, request.time_slot)
+        _step_ok(f"{request.district} / {request.date} / {request.time_slot.value} / {request.mood.value}")
     except ValueError as e:
         logger.error("입력 오류: %s", e)
         sys.exit(1)
 
     # Step 2: 취향 맥락 로드
+    _step(2, "Memory Agent", "SQLite에서 최근 취향 맥락 로드")
     preference_context = load_context()
     if preference_context:
-        print("\n[취향 맥락]")
-        print(preference_context)
+        _step_ok(f"{len(preference_context)}자 맥락 로드")
+        print(f"\n{preference_context}")
+    else:
+        _step_ok("저장된 취향 없음 (첫 실행이거나 DB 비어있음)")
 
     # Step 3: 장소 검색
+    _step(3, "Search Agent", "네이버 검색 → Google Places 병렬 조회")
     candidates = search_candidates(request)
     open_candidates = filter_open_places(candidates)
-    logger.info("영업 중 후보: %d개", len(open_candidates))
+    _step_ok(f"후보 {len(candidates)}개 수집, 영업 중 {len(open_candidates)}개")
 
-    # Step 4: 코스 구성
+    if not open_candidates:
+        print("\n영업 중인 장소를 찾지 못했습니다. 조건을 변경해 주세요.")
+        return
+
+    # Step 4 ~: 코스 구성 + HITL 루프
     replan_count = 0
     current_candidates = open_candidates
 
     while True:
+        label = f"리플랜 {replan_count}회차" if replan_count > 0 else "첫 생성"
+        _step(4 + replan_count, "Route Planner Agent", f"이동 시간 최적화 + 날씨 반영 ({label})")
         course = build_course(current_candidates, request)
 
         if not course.stops:
@@ -77,11 +88,14 @@ def run(raw_input: dict) -> None:
             print("\n조건에 맞는 코스를 생성할 수 없습니다. 조건을 변경해 주세요.")
             break
 
+        _step_ok(f"{len(course.stops)}개 장소, 이동 {course.total_transit_minutes}분, 예상 {course.total_estimated_cost:,}원")
         _print_course(course, replan_count)
 
         # CLI 모드: 자동 승인 (UI 없음)
+        _step(5 + replan_count, "Feedback & Replan Agent", "CLI 모드 — 자동 승인 처리")
         result = process_feedback(course, True, "", replan_count, request)
         if result.accepted:
+            _step_ok("Memory Agent에 방문 기록 및 취향 태그 저장 완료")
             print("\n코스가 저장되었습니다.")
             break
 
@@ -91,6 +105,20 @@ def run(raw_input: dict) -> None:
 
         current_candidates = apply_feedback_to_candidates(current_candidates, result.reason)
         replan_count = result.replan_count
+
+
+def _step(num: int, agent: str, detail: str) -> None:
+    """에이전트 실행 단계를 콘솔에 출력한다."""
+    bar = "─" * 50
+    print(f"\n{bar}")
+    print(f"  [Step {num}]  {agent}")
+    print(f"           {detail}")
+    print(bar)
+
+
+def _step_ok(result: str) -> None:
+    """단계 완료 결과를 콘솔에 출력한다."""
+    print(f"  ✓ {result}")
 
 
 def _print_course(course, replan_count: int) -> None:

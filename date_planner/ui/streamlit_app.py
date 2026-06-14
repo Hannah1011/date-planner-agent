@@ -129,15 +129,35 @@ def _generate_course(
         st.error(f"입력 오류: {e}")
         return
 
-    with st.spinner("코스를 구성하고 있습니다..."):
-        try:
+    try:
+        with st.status("코스를 구성하고 있습니다...", expanded=True) as status:
+            st.write("**[Step 1] Memory Agent** — 취향 맥락 로드 중...")
+            context = load_context()
+            if context:
+                st.caption(f"✓ 취향 맥락 {len(context)}자 로드 완료")
+            else:
+                st.caption("✓ 저장된 취향 없음")
+
+            st.write("**[Step 2] Search Agent** — 네이버 검색 → Google Places 병렬 조회 중...")
             candidates = search_candidates(request)
             open_candidates = filter_open_places(candidates)
+            st.caption(f"✓ 후보 {len(candidates)}개 수집, 영업 중 {len(open_candidates)}개")
+
+            st.write("**[Step 3] Route Planner Agent** — 이동 시간 최적화 + 날씨 반영 중...")
             course = build_course(open_candidates, request)
-        except Exception as e:
-            logger.error("코스 생성 실패: %s", e)
-            st.error("코스 생성 중 오류가 발생했습니다. 다시 시도해 주세요.")
-            return
+
+            if course.stops:
+                status.update(
+                    label=f"코스 완성! {len(course.stops)}개 장소 / 이동 {course.total_transit_minutes}분 / 예상 {course.total_estimated_cost:,}원",
+                    state="complete",
+                )
+            else:
+                status.update(label="조건에 맞는 장소를 찾지 못했습니다.", state="error")
+
+    except Exception as e:
+        logger.error("코스 생성 실패: %s", e)
+        st.error("코스 생성 중 오류가 발생했습니다. 다시 시도해 주세요.")
+        return
 
     if not course.stops:
         st.warning("조건에 맞는 장소를 찾지 못했습니다. 조건을 바꿔 보세요.")

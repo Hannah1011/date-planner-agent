@@ -5,6 +5,7 @@ import os
 import requests
 
 from date_planner.utils.logger import get_logger
+from date_planner.utils.text_utils import strip_floor_info
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,7 @@ def get_place_details(place_name: str, address: str) -> dict:
     try:
         place_id = _find_place_id(place_name, address, api_key)
         if not place_id:
+            logger.debug("Place ID 없음: %s — 별점/가격 정보 조회 건너뜀", place_name)
             return {}
 
         response = requests.get(
@@ -92,19 +94,43 @@ def is_place_open_now(place_id: str) -> bool:
 def _find_place_id(place_name: str, address: str, api_key: str) -> str:
     """장소명과 주소로 Google Place ID를 검색한다.
 
+    층/호 정보를 제거한 주소로 먼저 시도하고, 실패하면 장소명만으로 재시도한다.
+
     Args:
         place_name: 장소 이름.
-        address: 장소 주소.
+        address: 장소 주소 (층/호 포함 가능).
         api_key: Google Places API 키.
 
     Returns:
         Place ID 문자열. 찾지 못하면 빈 문자열.
     """
+    clean_address = strip_floor_info(address)
+
+    # 1차: 이름 + 층 제거 주소
+    place_id = _search_place(f"{place_name} {clean_address}", api_key)
+    if place_id:
+        return place_id
+
+    # 2차 폴백: 이름만
+    logger.debug("이름+주소 검색 실패, 이름만으로 재시도: %s", place_name)
+    return _search_place(place_name, api_key)
+
+
+def _search_place(query: str, api_key: str) -> str:
+    """단일 텍스트 쿼리로 Google Place ID를 검색한다.
+
+    Args:
+        query: 검색할 텍스트 (장소명 또는 장소명+주소).
+        api_key: Google Places API 키.
+
+    Returns:
+        Place ID 문자열. 없으면 빈 문자열.
+    """
     try:
         response = requests.get(
             _FIND_PLACE_URL,
             params={
-                "input": f"{place_name} {address}",
+                "input": query,
                 "inputtype": "textquery",
                 "fields": "place_id",
                 "key": api_key,
@@ -114,7 +140,10 @@ def _find_place_id(place_name: str, address: str, api_key: str) -> str:
         )
         response.raise_for_status()
         candidates = response.json().get("candidates", [])
-        return candidates[0].get("place_id", "") if candidates else ""
+        if not candidates:
+            logger.debug("Place 검색 결과 없음: %s", query)
+            return ""
+        return candidates[0].get("place_id", "")
     except requests.RequestException as e:
         logger.error("Place ID 검색 실패: %s", e)
         return ""
